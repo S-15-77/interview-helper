@@ -1,0 +1,9 @@
+faster-whisper
+pyaudio
+webrtcvad
+PyQt6
+pyobjc-framework-Cocoa
+requests
+numpy
+soundfile
+pytest
