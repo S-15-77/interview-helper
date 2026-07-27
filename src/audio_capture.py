@@ -1,3 +1,6 @@
+import sys
+
+import pyaudio
 import webrtcvad
 
 FRAME_MS = 30
@@ -32,3 +35,49 @@ class UtteranceSegmenter:
         self._speech_frames = []
         self._trailing_silence = 0
         return utterance
+
+
+def find_device_index(pa: pyaudio.PyAudio, name_substring: str = "BlackHole") -> int:
+    for i in range(pa.get_device_count()):
+        info = pa.get_device_info_by_index(i)
+        if name_substring.lower() in info["name"].lower() and info["maxInputChannels"] > 0:
+            return i
+    available = [pa.get_device_info_by_index(i)["name"] for i in range(pa.get_device_count())]
+    raise RuntimeError(
+        f"No input device matching '{name_substring}' found. Available devices: {available}"
+    )
+
+
+def open_capture_stream(pa: pyaudio.PyAudio, device_index: int) -> pyaudio.Stream:
+    return pa.open(
+        format=pyaudio.paInt16,
+        channels=1,
+        rate=SAMPLE_RATE,
+        input=True,
+        input_device_index=device_index,
+        frames_per_buffer=FRAME_SIZE,
+    )
+
+
+def _manual_check():
+    pa = pyaudio.PyAudio()
+    try:
+        device_index = find_device_index(pa)
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Reading from device index {device_index} for 5 seconds...")
+    stream = open_capture_stream(pa, device_index)
+    frame_count = 0
+    for _ in range(int(5000 / FRAME_MS)):
+        stream.read(FRAME_SIZE, exception_on_overflow=False)
+        frame_count += 1
+    stream.stop_stream()
+    stream.close()
+    pa.terminate()
+    print(f"Captured {frame_count} frames successfully.")
+
+
+if __name__ == "__main__":
+    _manual_check()
