@@ -15,3 +15,7 @@ def transcribe(audio: np.ndarray, sample_rate: int = 16000) -> str:
     model = _get_model()
     segments, _ = model.transcribe(audio, language="en")
     return " ".join(segment.text.strip() for segment in segments).strip()
+
+
+def preload() -> None:
+    _get_model()

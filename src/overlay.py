@@ -1,3 +1,5 @@
+import sys
+
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
@@ -32,6 +34,8 @@ class OverlayWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         self.label = QLabel("")
+        self.label.setTextFormat(Qt.TextFormat.PlainText)
+        self.label.setText("Listening…")
         self.label.setWordWrap(True)
         self.label.setStyleSheet(
             "background-color: rgba(20, 20, 20, 200); color: white;"
@@ -61,7 +65,11 @@ class OverlayWindow(QWidget):
             if ns_window is not None:
                 ns_window.setSharingType_(NSWindowSharingTypeNone)
         except Exception:
-            pass  # best-effort; overlay still functions if this fails
+            print(
+                "WARNING: screen-capture exclusion failed; the overlay WILL appear "
+                "in screen recordings/shares.",
+                file=sys.stderr,
+            )
 
     def _on_text_appended(self, chunk: str):
         self.label.setText(self.label.text() + chunk)

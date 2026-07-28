@@ -28,6 +28,10 @@ for use during a real employer interview.
    - Check both your normal output (e.g. "MacBook Pro Speakers" or your
      headphones) **and** "BlackHole 2ch".
    - Rename it to something recognizable, e.g. "Call + BlackHole".
+   - Set the Multi-Output Device's format to **16000 Hz** in Audio MIDI Setup
+     (select it, check the format dropdown) — a mismatched rate can cause an
+     "Invalid sample rate" error or degraded audio when the app opens the
+     BlackHole stream.
    - Before each practice session: **System Settings → Sound → Output** →
      select that Multi-Output Device.
 
@@ -45,11 +49,21 @@ for use during a real employer interview.
 
 ```
 source venv/bin/activate
-python src/app.py
+python -m src.app
 ```
+
+Run this from the project root (the `-m` form is required — `python
+src/app.py` fails with `ModuleNotFoundError`).
 
 An overlay window appears top-left. Start your video call with your friend
 (with system output set to the Multi-Output Device from step 3). When they
 ask a question, the app transcribes it after ~1s of silence and streams a
 coached answer onto the overlay. Each Q&A pair is logged to
 `sessions/<timestamp>.jsonl`.
+
+Press `Ctrl+C` in the terminal to stop the session.
+
+## Troubleshooting
+
+- **`Invalid sample rate`** at startup: the Multi-Output Device (or BlackHole
+  2ch) in Audio MIDI Setup isn't set to 16000 Hz. See step 3 above.

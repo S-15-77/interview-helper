@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pyaudio
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from src.audio_capture import (
@@ -18,6 +19,7 @@ from src.audio_capture import (
 from src.llm_client import stream_answer
 from src.overlay import OverlayWindow
 from src.session_logger import SessionLogger
+from src.transcriber import preload as preload_transcriber
 from src.transcriber import transcribe
 
 CONTEXT_WORD_LIMIT = 200
@@ -68,27 +70,37 @@ class Worker(threading.Thread):
 
 
 class CaptureThread(threading.Thread):
-    def __init__(self, utterance_queue: "queue.Queue[bytes]", pa: pyaudio.PyAudio, device_index: int):
+    def __init__(
+        self,
+        utterance_queue: "queue.Queue[bytes]",
+        pa: pyaudio.PyAudio,
+        device_index: int,
+        overlay: OverlayWindow,
+    ):
         super().__init__(daemon=True)
         self.utterance_queue = utterance_queue
         self.pa = pa
         self.device_index = device_index
+        self.overlay = overlay
         self._stop = threading.Event()
 
     def run(self):
         pa = self.pa
-        stream = open_capture_stream(pa, self.device_index)
-        segmenter = UtteranceSegmenter()
         try:
-            while not self._stop.is_set():
-                frame = stream.read(FRAME_SIZE, exception_on_overflow=False)
-                utterance = segmenter.push_frame(frame)
-                if utterance is not None:
-                    self.utterance_queue.put(utterance)
-        finally:
-            stream.stop_stream()
-            stream.close()
-            pa.terminate()
+            stream = open_capture_stream(pa, self.device_index)
+            segmenter = UtteranceSegmenter()
+            try:
+                while not self._stop.is_set():
+                    frame = stream.read(FRAME_SIZE, exception_on_overflow=False)
+                    utterance = segmenter.push_frame(frame)
+                    if utterance is not None:
+                        self.utterance_queue.put(utterance)
+            finally:
+                stream.stop_stream()
+                stream.close()
+                pa.terminate()
+        except Exception as exc:
+            self.overlay.show_error(f"Audio capture stopped: {exc}")
 
     def stop(self):
         self._stop.set()
@@ -103,8 +115,15 @@ def main():
         sys.exit(1)
 
     app = QApplication(sys.argv)
+
+    _signal_timer = QTimer()
+    _signal_timer.timeout.connect(lambda: None)
+    _signal_timer.start(200)
+
     overlay = OverlayWindow()
     overlay.show()
+
+    preload_transcriber()
 
     logger = SessionLogger(Path("sessions"))
     utterance_queue: "queue.Queue[bytes]" = queue.Queue()
@@ -112,7 +131,7 @@ def main():
     worker = Worker(utterance_queue, overlay, logger)
     worker.start()
 
-    capture = CaptureThread(utterance_queue, pa, device_index)
+    capture = CaptureThread(utterance_queue, pa, device_index, overlay)
     capture.start()
 
     sys.exit(app.exec())
