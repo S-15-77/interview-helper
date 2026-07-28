@@ -1,6 +1,7 @@
 import queue
 import sys
 import threading
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -43,36 +44,40 @@ class Worker(threading.Thread):
     def run(self):
         while True:
             pcm_bytes = self.utterance_queue.get()
-            audio = pcm_bytes_to_float32(pcm_bytes)
-            question = transcribe(audio, SAMPLE_RATE)
-            if not question.strip():
-                continue
-
-            self.overlay.clear()
             try:
-                answer_parts = []
-                for chunk in stream_answer(question, self.context):
-                    answer_parts.append(chunk)
-                    self.overlay.append_text(chunk)
-            except Exception as exc:
-                self.overlay.show_error(f"Ollama error: {exc}")
-                continue
+                audio = pcm_bytes_to_float32(pcm_bytes)
+                question = transcribe(audio, SAMPLE_RATE)
+                if not question.strip():
+                    continue
 
-            answer = "".join(answer_parts)
-            self.context = trim_context(self.context, f"Q: {question} A: {answer}")
-            self.logger.log(question, answer)
+                self.overlay.clear()
+                try:
+                    answer_parts = []
+                    for chunk in stream_answer(question, self.context):
+                        answer_parts.append(chunk)
+                        self.overlay.append_text(chunk)
+                except Exception as exc:
+                    self.overlay.show_error(f"Ollama error: {exc}")
+                    continue
+
+                answer = "".join(answer_parts)
+                self.context = trim_context(self.context, f"Q: {question} A: {answer}")
+                self.logger.log(question, answer)
+            except Exception:
+                traceback.print_exc()
 
 
 class CaptureThread(threading.Thread):
-    def __init__(self, utterance_queue: "queue.Queue[bytes]"):
+    def __init__(self, utterance_queue: "queue.Queue[bytes]", pa: pyaudio.PyAudio, device_index: int):
         super().__init__(daemon=True)
         self.utterance_queue = utterance_queue
+        self.pa = pa
+        self.device_index = device_index
         self._stop = threading.Event()
 
     def run(self):
-        pa = pyaudio.PyAudio()
-        device_index = find_device_index(pa)
-        stream = open_capture_stream(pa, device_index)
+        pa = self.pa
+        stream = open_capture_stream(pa, self.device_index)
         segmenter = UtteranceSegmenter()
         try:
             while not self._stop.is_set():
@@ -90,6 +95,13 @@ class CaptureThread(threading.Thread):
 
 
 def main():
+    pa = pyaudio.PyAudio()
+    try:
+        device_index = find_device_index(pa)
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        sys.exit(1)
+
     app = QApplication(sys.argv)
     overlay = OverlayWindow()
     overlay.show()
@@ -100,7 +112,7 @@ def main():
     worker = Worker(utterance_queue, overlay, logger)
     worker.start()
 
-    capture = CaptureThread(utterance_queue)
+    capture = CaptureThread(utterance_queue, pa, device_index)
     capture.start()
 
     sys.exit(app.exec())
