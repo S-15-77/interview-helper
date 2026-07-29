@@ -1,6 +1,8 @@
 import queue
+import signal
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -23,6 +25,7 @@ from src.transcriber import preload as preload_transcriber
 from src.transcriber import transcribe
 
 CONTEXT_WORD_LIMIT = 200
+STREAM_REVEAL_DELAY_SECONDS = 0.05  # slows the overlay to a readable pace
 
 
 def pcm_bytes_to_float32(data: bytes) -> np.ndarray:
@@ -52,12 +55,13 @@ class Worker(threading.Thread):
                 if not question.strip():
                     continue
 
-                self.overlay.clear()
+                self.overlay.begin_question(question)
                 try:
                     answer_parts = []
                     for chunk in stream_answer(question, self.context):
                         answer_parts.append(chunk)
                         self.overlay.append_text(chunk)
+                        time.sleep(STREAM_REVEAL_DELAY_SECONDS)
                 except Exception as exc:
                     self.overlay.show_error(f"Ollama error: {exc}")
                     continue
@@ -133,6 +137,20 @@ def main():
 
     capture = CaptureThread(utterance_queue, pa, device_index, overlay)
     capture.start()
+
+    def handle_sigint(*_args):
+        # Without this, Ctrl+C's default handler raises KeyboardInterrupt
+        # from inside whatever Qt slot happens to be running when the
+        # signal is noticed (here, the timer below) — PyQt6 treats any
+        # exception escaping a slot as fatal and calls abort(). Stop the
+        # audio stream deterministically first, then quit Qt normally
+        # instead of letting a KeyboardInterrupt raise at all.
+        capture.stop()
+        capture.join(timeout=2)
+        app.quit()
+
+    signal.signal(signal.SIGINT, handle_sigint)
+    overlay.quit_requested.connect(handle_sigint)
 
     sys.exit(app.exec())
 
