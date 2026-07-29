@@ -1,7 +1,14 @@
 import sys
+import warnings
 
 import pyaudio
-import webrtcvad
+
+with warnings.catch_warnings():
+    # webrtcvad's own import path pulls in pkg_resources, which emits this
+    # deprecation notice on every startup; harmless, so mute it at the source
+    # instead of letting it print each run.
+    warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
+    import webrtcvad
 
 FRAME_MS = 30
 SAMPLE_RATE = 16000
