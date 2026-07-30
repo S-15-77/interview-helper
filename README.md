@@ -11,9 +11,12 @@ for use during a real employer interview.
    ```
    brew install ollama
    ollama serve &   # or launch the Ollama app
-   ollama pull llama3.2
+   ollama pull qwen2.5:3b-instruct
    ```
-   Verify: `ollama list` should show `llama3.2`.
+   Verify: `ollama list` should show `qwen2.5:3b-instruct`. This is the fast model, tuned
+   for real-time answers. Want more reliable answers on hard technical questions instead of
+   speed? Pull `qwen2.5:7b-instruct` and ask Claude Code to switch the default model for you
+   — see SETUP.md.
 
 2. **Install BlackHole** (virtual audio device that lets the app "hear"
    your friend's voice from the call):
@@ -50,7 +53,17 @@ for use during a real employer interview.
    each question and used to ground behavioral/non-technical answers in your
    actual experience instead of generic placeholders. See `my_data/README.md`
    for details. This folder is gitignored (except its own README template)
-   so your personal data never gets committed.
+   so your personal data never gets committed. Don't want to write it by hand?
+   Ask Claude Code to draft it from your resume.
+
+7. **(Optional) Customize the coaching style:** drop `.md` files into
+   `skills/` to teach the bot new rules or question-type playbooks (a "tell
+   me about yourself" framework, how to handle weakness questions, etc.) —
+   read fresh on every question, same as `my_data/`. Unlike `my_data/`, this
+   folder isn't gitignored — skills are general interview strategy, not
+   personal data, so they're meant to be shared. See `skills/README.md`. Ask
+   Claude Code to turn an article or video's tips into a new skill file for
+   you instead of hand-editing the prompt.
 
 ## Running a session
 
@@ -66,7 +79,9 @@ An overlay window appears top-left, excluded from screen shares/recordings
 and pinned on top even when you click into the browser or another app. It
 keeps a scrollable history of the whole session rather than clearing after
 each question — scroll up to reread earlier answers; it auto-follows the
-newest text as long as you're already at the bottom. Start your video call
+newest text as long as you're already at the bottom. Drag the header bar to
+reposition the window, and click-drag over the answer text to select and
+copy it. Start your video call
 with your friend (with system output set to the Multi-Output Device from
 step 3). When they ask a question, the app transcribes it after ~1s of
 silence and streams a coached answer onto the overlay. Each Q&A pair is

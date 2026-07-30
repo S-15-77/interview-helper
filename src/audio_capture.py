@@ -15,10 +15,14 @@ SAMPLE_RATE = 16000
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_MS / 1000)
 SILENCE_TRAILING_MS = 1000
 SILENCE_TRAILING_FRAMES = SILENCE_TRAILING_MS // FRAME_MS
+# Below this, a "speech" burst is more likely a click/comfort-noise blip than a real
+# word — Whisper hallucinates confident text on exactly these short noise fragments.
+MIN_SPEECH_MS = 300
+MIN_SPEECH_FRAMES = MIN_SPEECH_MS // FRAME_MS
 
 
 class UtteranceSegmenter:
-    def __init__(self, vad_aggressiveness: int = 2):
+    def __init__(self, vad_aggressiveness: int = 3):
         self._vad = webrtcvad.Vad(vad_aggressiveness)
         self._speech_frames: list[bytes] = []
         self._trailing_silence = 0
@@ -38,10 +42,11 @@ class UtteranceSegmenter:
         if self._trailing_silence < SILENCE_TRAILING_FRAMES:
             return None
 
-        utterance = b"".join(self._speech_frames)
-        self._speech_frames = []
+        frames, self._speech_frames = self._speech_frames, []
         self._trailing_silence = 0
-        return utterance
+        if len(frames) < MIN_SPEECH_FRAMES:
+            return None
+        return b"".join(frames)
 
 
 def find_device_index(pa: pyaudio.PyAudio, name_substring: str = "BlackHole") -> int:

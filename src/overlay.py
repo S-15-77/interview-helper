@@ -26,6 +26,28 @@ except ImportError:
     _HAS_APPKIT = False
 
 
+class _DragHandle(QWidget):
+    """A widget that moves its top-level window when dragged."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._drag_offset = None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_offset = event.globalPosition().toPoint() - self.window().pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.window().move(event.globalPosition().toPoint() - self._drag_offset)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
+
+
 class OverlaySignals(QObject):
     question_started = pyqtSignal(str)
     text_appended = pyqtSignal(str)
@@ -69,6 +91,10 @@ class OverlayWindow(QWidget):
         # below stretches this label to fill the box, centered text left a
         # large dead gap above (and below) short answers. Anchor to the top.
         self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         self.label.setStyleSheet(
             "background-color: rgba(20, 20, 20, 200); color: white;"
             "padding: 14px; font-size: 16px;"
@@ -87,7 +113,7 @@ class OverlayWindow(QWidget):
         # The close button used to float directly on the translucent window
         # background with nothing behind it — effectively invisible over an
         # unpredictable desktop. Give it its own opaque header bar instead.
-        self.header = QWidget()
+        self.header = _DragHandle()
         self.header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.header.setStyleSheet(
             "background-color: rgba(20, 20, 20, 200);"

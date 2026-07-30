@@ -2,7 +2,6 @@ import queue
 import signal
 import sys
 import threading
-import time
 import traceback
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from src.audio_capture import (
     find_device_index,
     open_capture_stream,
 )
+from src.llm_client import preload as preload_llm
 from src.llm_client import stream_answer
 from src.overlay import OverlayWindow
 from src.session_logger import SessionLogger
@@ -25,7 +25,6 @@ from src.transcriber import preload as preload_transcriber
 from src.transcriber import transcribe
 
 CONTEXT_WORD_LIMIT = 200
-STREAM_REVEAL_DELAY_SECONDS = 0.05  # slows the overlay to a readable pace
 
 
 def pcm_bytes_to_float32(data: bytes) -> np.ndarray:
@@ -61,7 +60,6 @@ class Worker(threading.Thread):
                     for chunk in stream_answer(question, self.context):
                         answer_parts.append(chunk)
                         self.overlay.append_text(chunk)
-                        time.sleep(STREAM_REVEAL_DELAY_SECONDS)
                 except Exception as exc:
                     self.overlay.show_error(f"Ollama error: {exc}")
                     continue
@@ -128,6 +126,7 @@ def main():
     overlay.show()
 
     preload_transcriber()
+    preload_llm()
 
     logger = SessionLogger(Path("sessions"))
     utterance_queue: "queue.Queue[bytes]" = queue.Queue()

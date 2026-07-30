@@ -5,6 +5,7 @@ from pathlib import Path
 import requests
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
+DEFAULT_MODEL = "qwen2.5:3b-instruct"
 
 # SYSTEM_PROMPT = (
 #     "You are a world-class Software Engineering Interview Coach (ex-FAANG hiring manager). "
@@ -45,13 +46,29 @@ SYSTEM_PROMPT = (
     "- Do: answer instantly and conversationally — write exactly what a confident, knowledgeable "
     "engineer would say out loud, not academic or robotic prose.\n"
     "- Do: for behavioral/non-technical questions, use a seamless first-person STAR narrative "
-    "(Situation, Task, Action, Result) without labeling the parts (never say 'The situation was...').\n"
+    "(Situation, Task, Action, Result) without labeling the parts (never say 'The situation was...'); "
+    "make the Result concrete and quantifiable wherever the Candidate Profile supports it (time saved, "
+    "percent improvement, scale handled) rather than a vague 'it went well.'\n"
+    "- Do: when a story involves a past employer, team, or leaving a role, stay positive — frame it as "
+    "seeking a new challenge or growth, never as complaining about the employer, manager, or team.\n"
+    "- Do: if the Candidate Profile includes a target job description, explicitly connect the answer to "
+    "how the candidate's real skills/experience address what that specific role needs.\n"
     "- Do: for technical questions — DSA/algorithms: state the optimal approach immediately, then "
     "its time/space complexity (pseudocode only if essential, max 3-4 lines); system design: outline "
     "the high-level architecture, justify the main component choices, name one key trade-off; "
     "trivia/concepts: a crisp definition plus one practical use case.\n"
-    "- Do NOT use filler openers ('That's a great question', 'Sure, I can help with that') — start "
-    "directly with the substance.\n"
+    "- Do NOT use filler openers ('That's a great question', 'Sure, I can help with that', 'Sure, "
+    "I'm...', 'Sure, I have...') — never start a response with 'Sure' at all; start directly with the "
+    "substance, as if mid-conversation with the interviewer.\n"
+    "- Do NOT ask the interviewer a question back or invite their reaction ('What do you think?', "
+    "'Does that make sense?') — the one exception is when the question itself was 'Do you have any "
+    "questions for us?', where asking questions back is literally the answer.\n"
+    "- Do NOT turn background/self-intro questions into an inventory of every fact in the Candidate "
+    "Profile ('I've also worked on X. I'm also involved in Y.') — that reads like a resume readout, "
+    "not a person talking. Pick the 2-3 points most relevant to what was asked and connect them into "
+    "one flowing story with a clear thread, the way someone would actually introduce themselves. "
+    "Still use the full ~150-200 word budget — go deeper on the points you pick (what you built, why "
+    "it mattered, a concrete detail) rather than trimming to fewer words.\n"
     "- Do NOT invent facts: base technical claims on real, verified computer science principles and "
     "language/system specs, never fake APIs or unproven techniques; if the Candidate Profile below "
     "doesn't cover something personal, use a standard, believable placeholder scenario (a production "
@@ -73,6 +90,16 @@ SYSTEM_PROMPT = (
     "greetings, headers, or any meta-commentary.\n\n"
     "# 6. Golden Examples\n"
     "<example>\n"
+    "<input>Tell me about yourself.</input>\n"
+    "<output>I'm a cloud and AI engineer currently interning at Gigasphere while finishing my "
+    "Master's in Applied Computer Science. Most of my recent work has been building secure, "
+    "production infrastructure — I designed an HR document portal on GCP that's locked down with "
+    "Identity-Aware Proxy and KMS encryption, and I've spent a lot of time since then wiring LLMs "
+    "into real pipelines rather than just prototypes. What ties it together is that I like owning "
+    "things end to end, from the cloud security layer up through the AI integration — that's the "
+    "direction I want to keep growing in.</output>\n"
+    "</example>\n"
+    "<example>\n"
     "<input>Tell me about a time you disagreed with a teammate.</input>\n"
     "<output>On a recent project, a teammate and I disagreed on whether to cache results "
     "client-side or server-side. I laid out the latency and consistency trade-offs for both, we "
@@ -93,13 +120,12 @@ SYSTEM_PROMPT = (
     "</example>"
 )
 
-def load_knowledge_base() -> str:
-    kb_path = Path("my_data")
-    if not kb_path.exists() or not kb_path.is_dir():
+def _read_markdown_dir(dir_path: Path) -> str:
+    if not dir_path.exists() or not dir_path.is_dir():
         return ""
-    
+
     docs = []
-    for file_path in kb_path.glob("**/*"):
+    for file_path in sorted(dir_path.glob("**/*")):
         if file_path.is_file() and file_path.suffix in (".md", ".txt"):
             try:
                 content = file_path.read_text(encoding="utf-8").strip()
@@ -107,26 +133,52 @@ def load_knowledge_base() -> str:
                     docs.append(f"--- File: {file_path.name} ---\n{content}")
             except Exception as e:
                 print(f"Error reading {file_path}: {e}")
-                
+
     return "\n\n".join(docs)
+
+
+def load_knowledge_base() -> str:
+    return _read_markdown_dir(Path("my_data"))
+
+
+def load_skills() -> str:
+    return _read_markdown_dir(Path("skills"))
+
 
 def build_prompt(context: str, question: str) -> str:
     context = context.strip()
     kb_data = load_knowledge_base()
-    
+    skills_data = load_skills()
+
+    skills_block = f"{skills_data}\n\n" if skills_data else ""
     kb_block = f"Candidate Profile:\n{kb_data}\n\n" if kb_data else ""
     context_block = f"Recent conversation:\n{context}\n\n" if context else ""
-    return f"{SYSTEM_PROMPT}\n\n{kb_block}{context_block}Question: {question}\n\nAnswer:"
+    return f"{SYSTEM_PROMPT}\n\n{skills_block}{kb_block}{context_block}Question: {question}\n\nAnswer:"
 
 
-def stream_answer(question: str, context: str = "", model: str = "llama3.2") -> Iterator[str]:
+def preload(model: str = DEFAULT_MODEL) -> None:
+    """Warm the model into Ollama's memory so the first real question doesn't hit a cold-load timeout."""
+    try:
+        requests.post(
+            OLLAMA_URL,
+            json={"model": model, "prompt": "Hi", "stream": False},
+            timeout=120,
+        )
+    except requests.RequestException:
+        pass  # the real error surfaces on the first real question via the overlay
+
+
+def stream_answer(question: str, context: str = "", model: str = DEFAULT_MODEL) -> Iterator[str]:
     payload = {
         "model": model,
         "prompt": build_prompt(context, question),
         "stream": True,
-        "options": {"temperature": 0.8},
+        # num_predict bounds worst-case generation time — the system prompt already
+        # targets ~150-200 words, this just stops a runaway answer from tacking on
+        # extra seconds of unbounded generation.
+        "options": {"temperature": 0.1,},
     }
-    with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=30) as response:
+    with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=60) as response:
         response.raise_for_status()
         for line in response.iter_lines():
             if not line:
