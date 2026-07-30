@@ -1,4 +1,4 @@
-# Mock Interview Overlay
+# Interview Overlay
 
 Fully local mock-interview practice tool: transcribes your friend's voice
 during a video call and streams a coached answer onto a floating overlay.
