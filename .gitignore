@@ -4,3 +4,5 @@ __pycache__/
 venv/
 sessions/
 .DS_Store
+my_data/*
+!my_data/README.md
