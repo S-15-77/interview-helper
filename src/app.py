@@ -38,23 +38,47 @@ def trim_context(context: str, new_text: str, word_limit: int = CONTEXT_WORD_LIM
 
 
 class Worker(threading.Thread):
-    def __init__(self, utterance_queue: "queue.Queue[bytes]", overlay: OverlayWindow, logger: SessionLogger):
+    def __init__(self, utterance_queue: "queue.Queue[tuple[bytes, bool]]", overlay: OverlayWindow, logger: SessionLogger):
         super().__init__(daemon=True)
         self.utterance_queue = utterance_queue
         self.overlay = overlay
         self.logger = logger
         self.context = ""
+        self.current_filler = ""
+        self._partial_thread = None
+
+    def _process_partial(self, audio: np.ndarray):
+        try:
+            partial_question = transcribe(audio, SAMPLE_RATE)
+            if partial_question.strip():
+                from src.llm_client import generate_filler
+                filler = generate_filler(partial_question)
+                self.current_filler = filler
+        except Exception as e:
+            print(f"Partial transcription error: {e}")
 
     def run(self):
         while True:
-            pcm_bytes = self.utterance_queue.get()
+            pcm_bytes, is_final = self.utterance_queue.get()
             try:
                 audio = pcm_bytes_to_float32(pcm_bytes)
+                
+                if not is_final:
+                    self.current_filler = ""
+                    self._partial_thread = threading.Thread(target=self._process_partial, args=(audio,), daemon=True)
+                    self._partial_thread.start()
+                    continue
+                    
                 question = transcribe(audio, SAMPLE_RATE)
                 if not question.strip():
+                    self.current_filler = ""
                     continue
 
                 self.overlay.begin_question(question)
+                if self.current_filler:
+                    self.overlay.append_text(f"<i>{self.current_filler}</i>\n\n")
+                    self.current_filler = ""
+                    
                 try:
                     answer_parts = []
                     for chunk in stream_answer(question, self.context):
@@ -74,7 +98,7 @@ class Worker(threading.Thread):
 class CaptureThread(threading.Thread):
     def __init__(
         self,
-        utterance_queue: "queue.Queue[bytes]",
+        utterance_queue: "queue.Queue[tuple[bytes, bool]]",
         pa: pyaudio.PyAudio,
         device_index: int,
         overlay: OverlayWindow,
@@ -129,7 +153,7 @@ def main():
     preload_llm()
 
     logger = SessionLogger(Path("sessions"))
-    utterance_queue: "queue.Queue[bytes]" = queue.Queue()
+    utterance_queue: "queue.Queue[tuple[bytes, bool]]" = queue.Queue()
 
     worker = Worker(utterance_queue, overlay, logger)
     worker.start()

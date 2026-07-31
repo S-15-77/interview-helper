@@ -1,4 +1,14 @@
-from src.app import trim_context
+import numpy as np
+
+from src.app import pcm_bytes_to_float32, trim_context
+
+
+def test_pcm_bytes_to_float32_scales_int16_range():
+    ints = np.array([0, 32767, -32768], dtype="<i2")
+    floats = pcm_bytes_to_float32(ints.tobytes())
+
+    assert floats.dtype == np.float32
+    assert np.allclose(floats, [0.0, 32767 / 32768.0, -1.0])
 
 
 def test_trim_context_keeps_last_n_words():

@@ -22,17 +22,25 @@ MIN_SPEECH_FRAMES = MIN_SPEECH_MS // FRAME_MS
 
 
 class UtteranceSegmenter:
-    def __init__(self, vad_aggressiveness: int = 3):
+    def __init__(self, vad_aggressiveness: int = 3, partial_ms: int = 3000):
         self._vad = webrtcvad.Vad(vad_aggressiveness)
         self._speech_frames: list[bytes] = []
         self._trailing_silence = 0
+        self._partial_frames = partial_ms // FRAME_MS
+        self._last_partial_count = 0
 
-    def push_frame(self, frame_bytes: bytes) -> bytes | None:
+    def push_frame(self, frame_bytes: bytes) -> tuple[bytes, bool] | None:
         is_speech = self._vad.is_speech(frame_bytes, SAMPLE_RATE)
 
         if is_speech:
             self._speech_frames.append(frame_bytes)
             self._trailing_silence = 0
+            
+            # Emit a partial chunk every `partial_ms` of continuous speech
+            if len(self._speech_frames) - self._last_partial_count >= self._partial_frames:
+                self._last_partial_count = len(self._speech_frames)
+                return (b"".join(self._speech_frames), False)
+                
             return None
 
         if not self._speech_frames:
@@ -44,9 +52,11 @@ class UtteranceSegmenter:
 
         frames, self._speech_frames = self._speech_frames, []
         self._trailing_silence = 0
+        self._last_partial_count = 0
+        
         if len(frames) < MIN_SPEECH_FRAMES:
             return None
-        return b"".join(frames)
+        return (b"".join(frames), True)
 
 
 def find_device_index(pa: pyaudio.PyAudio, name_substring: str = "BlackHole") -> int:

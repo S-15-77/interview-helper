@@ -168,6 +168,29 @@ def preload(model: str = DEFAULT_MODEL) -> None:
         pass  # the real error surfaces on the first real question via the overlay
 
 
+def generate_filler(partial_question: str, model: str = DEFAULT_MODEL) -> str:
+    prompt = (
+        "You are an expert interview copilot. The user is asking an interview question but hasn't finished yet. "
+        f"Partial question: \"{partial_question}\"\n\n"
+        "Generate a brief, natural stalling phrase to buy time. For example: 'That's a great question about [topic]...' "
+        "or 'Let me think about [topic] for a second...'. Do NOT answer the question. ONLY output the stalling phrase, max 12 words."
+    )
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.1},
+    }
+    try:
+        response = requests.post(OLLAMA_URL, json=payload, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("response", "").strip().strip('"')
+    except Exception as e:
+        print(f"Error generating filler: {e}")
+        return "That's a great question, let me think..."
+
+
 def stream_answer(question: str, context: str = "", model: str = DEFAULT_MODEL) -> Iterator[str]:
     payload = {
         "model": model,
