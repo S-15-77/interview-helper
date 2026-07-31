@@ -143,9 +143,15 @@ class OverlayWindow(QWidget):
 
         self.setFixedWidth(480)
         screen = QApplication.primaryScreen()
-        available_height = screen.availableGeometry().height() if screen else 900
+        geometry = screen.availableGeometry() if screen else None
+        available_height = geometry.height() if geometry else 900
         self.setFixedHeight(min(500, available_height - 120))
-        self.move(60, 60)
+        # Top-center, near the built-in webcam — easier to glance at than a
+        # corner position, and can still be dragged anywhere via the header.
+        if geometry:
+            self.move(geometry.x() + (geometry.width() - self.width()) // 2, geometry.y() + 20)
+        else:
+            self.move(60, 60)
 
     def showEvent(self, event):
         super().showEvent(event)
