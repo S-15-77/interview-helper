@@ -75,11 +75,14 @@ python -m src.app
 Run this from the project root (the `-m` form is required — `python
 src/app.py` fails with `ModuleNotFoundError`).
 
-An overlay window appears top-left, excluded from screen shares/recordings
-and pinned on top even when you click into the browser or another app. It
-keeps a scrollable history of the whole session rather than clearing after
-each question — scroll up to reread earlier answers; it auto-follows the
-newest text as long as you're already at the bottom. Drag the header bar to
+An overlay window appears top-center and is pinned on top even when you click
+into the browser or another app. The app requests macOS's best-effort window
+capture exclusion, but current macOS versions do not guarantee it for entire-
+display capture. To ensure other participants cannot see the overlay, share
+only the interview browser/app window (or a browser tab), **not Entire
+Screen**. It keeps a scrollable history of the whole session rather than
+clearing after each question — scroll up to reread earlier answers; it
+auto-follows the newest text as long as you're already at the bottom. Drag the header bar to
 reposition the window, and click-drag over the answer text to select and
 copy it. Start your video call
 with your friend (with system output set to the Multi-Output Device from

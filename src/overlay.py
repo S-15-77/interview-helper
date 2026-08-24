@@ -182,10 +182,10 @@ class OverlayWindow(QWidget):
                 # hides itself whenever this app isn't the frontmost one —
                 # exactly the case during a call, since Meet/Zoom is active.
                 ns_window.setHidesOnDeactivate_(False)
-        except Exception:
+        except Exception as exc:
             print(
                 "WARNING: native window setup failed; the overlay may appear "
-                "in screen recordings/shares or hide behind other windows.",
+                f"in screen recordings/shares or hide behind other windows: {exc}",
                 file=sys.stderr,
             )
 
