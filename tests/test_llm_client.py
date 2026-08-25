@@ -1,7 +1,16 @@
 import json
 from unittest.mock import MagicMock, Mock, patch
 
-from src.llm_client import build_prompt, generate_filler, stream_answer
+import pytest
+
+from src.llm_client import (
+    build_prompt,
+    generate_filler,
+    list_application_profiles,
+    load_knowledge_base,
+    load_skills,
+    stream_answer,
+)
 
 
 def test_build_prompt_includes_question_and_star_guidance():
@@ -23,6 +32,90 @@ def test_build_prompt_includes_context_block_when_present():
 def test_build_prompt_omits_context_block_when_context_empty():
     prompt = build_prompt(context="", question="What is a hash map?")
     assert "Recent conversation:" not in prompt
+
+
+def test_default_knowledge_base_excludes_readme_and_saved_applications(tmp_path):
+    my_data = tmp_path / "my_data"
+    application = my_data / "applications" / "compiler-role"
+    application.mkdir(parents=True)
+    (my_data / "README.md").write_text("documentation only")
+    (my_data / "profile.md").write_text("legacy candidate profile")
+    (application / "resume.md").write_text("compiler resume")
+
+    knowledge = load_knowledge_base(my_data_dir=my_data)
+
+    assert "legacy candidate profile" in knowledge
+    assert "documentation only" not in knowledge
+    assert "compiler resume" not in knowledge
+
+
+def test_skills_loader_excludes_its_readme(tmp_path, monkeypatch):
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "README.md").write_text("documentation only")
+    (skills / "compiler.md").write_text("compiler-specific instructions")
+    monkeypatch.chdir(tmp_path)
+
+    loaded = load_skills()
+
+    assert "compiler-specific instructions" in loaded
+    assert "documentation only" not in loaded
+
+
+def test_selected_application_loads_only_its_files(tmp_path):
+    my_data = tmp_path / "my_data"
+    compiler = my_data / "applications" / "compiler-role"
+    ml = my_data / "applications" / "ml-role"
+    compiler.mkdir(parents=True)
+    ml.mkdir(parents=True)
+    (my_data / "profile.md").write_text("default resume")
+    (compiler / "resume.md").write_text("compiler resume")
+    (compiler / "job_description.md").write_text("build compiler passes")
+    (compiler / "README.md").write_text("compiler documentation")
+    (ml / "resume.md").write_text("machine learning resume")
+
+    knowledge = load_knowledge_base("compiler-role", my_data_dir=my_data)
+
+    assert "compiler resume" in knowledge
+    assert "build compiler passes" in knowledge
+    assert "compiler documentation" not in knowledge
+    assert "machine learning resume" not in knowledge
+    assert "default resume" not in knowledge
+
+
+def test_application_profiles_are_listed_in_sorted_order(tmp_path):
+    applications = tmp_path / "applications"
+    for name in ("zeta-role", "alpha-role"):
+        profile = applications / name
+        profile.mkdir(parents=True)
+        (profile / "resume.md").write_text(name)
+    empty_profile = applications / "empty-role"
+    empty_profile.mkdir()
+
+    assert list_application_profiles(applications) == ["alpha-role", "zeta-role"]
+
+
+def test_application_profile_rejects_path_traversal(tmp_path):
+    my_data = tmp_path / "my_data"
+    (my_data / "applications").mkdir(parents=True)
+
+    with pytest.raises(ValueError):
+        load_knowledge_base("..", my_data_dir=my_data)
+
+
+def test_build_prompt_labels_active_application_profile():
+    with (
+        patch(
+            "src.llm_client.load_knowledge_base",
+            return_value="compiler resume and JD",
+        ),
+        patch("src.llm_client.load_skills", return_value=""),
+    ):
+        prompt = build_prompt("", "What is IR?", profile_name="compiler-role")
+
+    assert "Active Application Profile (compiler-role):" in prompt
+    assert "compiler resume and JD" in prompt
+    assert "intermediate representation" in prompt
 
 
 def test_generate_filler_strips_quotes_from_response():

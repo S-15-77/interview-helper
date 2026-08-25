@@ -3,6 +3,7 @@ import signal
 import sys
 import threading
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -18,13 +19,21 @@ from src.audio_capture import (
     open_capture_stream,
 )
 from src.llm_client import preload as preload_llm
-from src.llm_client import stream_answer
+from src.llm_client import list_application_profiles, stream_answer
 from src.overlay import OverlayWindow
 from src.session_logger import SessionLogger
 from src.transcriber import preload as preload_transcriber
 from src.transcriber import transcribe
 
 CONTEXT_WORD_LIMIT = 200
+
+
+@dataclass(frozen=True)
+class ManualQuestion:
+    text: str
+
+
+WorkItem = tuple[bytes, bool] | ManualQuestion | None
 
 
 def pcm_bytes_to_float32(data: bytes) -> np.ndarray:
@@ -40,7 +49,7 @@ def trim_context(context: str, new_text: str, word_limit: int = CONTEXT_WORD_LIM
 class Worker(threading.Thread):
     def __init__(
         self,
-        utterance_queue: "queue.Queue[tuple[bytes, bool] | None]",
+        utterance_queue: "queue.Queue[WorkItem]",
         overlay: OverlayWindow,
         logger: SessionLogger,
     ):
@@ -53,6 +62,8 @@ class Worker(threading.Thread):
         self._partial_thread: threading.Thread | None = None
         self._partial_generation = 0
         self._partial_lock = threading.Lock()
+        self._profile_name: str | None = None
+        self._profile_lock = threading.Lock()
 
     def _process_partial(self, audio: np.ndarray, generation: int):
         try:
@@ -103,11 +114,61 @@ class Worker(threading.Thread):
             self.current_filler = ""
         self.utterance_queue.put(None)
 
+    def submit_manual_question(self, question: str) -> None:
+        question = question.strip()
+        if question:
+            self.utterance_queue.put(ManualQuestion(question))
+
+    def set_profile(self, profile_name: str | None) -> None:
+        with self._profile_lock:
+            self._profile_name = profile_name or None
+            # Conversation from one application should never bias another.
+            self.context = ""
+
+    def _prompt_state(self) -> tuple[str, str | None]:
+        with self._profile_lock:
+            return self.context, self._profile_name
+
+    def _answer_question(self, question: str, filler: str = "") -> None:
+        self.overlay.begin_question(question)
+        if filler:
+            self.overlay.append_text(f"{filler}\n\n")
+
+        context, profile_name = self._prompt_state()
+        try:
+            answer_parts = []
+            for chunk in stream_answer(
+                question,
+                context,
+                profile_name=profile_name,
+            ):
+                answer_parts.append(chunk)
+                self.overlay.append_text(chunk)
+        except Exception as exc:
+            self.overlay.show_error(f"Ollama error: {exc}")
+            return
+
+        answer = "".join(answer_parts)
+        with self._profile_lock:
+            if profile_name == self._profile_name:
+                self.context = trim_context(
+                    self.context,
+                    f"Q: {question} A: {answer}",
+                )
+        self.logger.log(question, answer)
+
     def run(self):
         while True:
             item = self.utterance_queue.get()
             if item is None:
                 return
+            if isinstance(item, ManualQuestion):
+                try:
+                    self._take_current_filler()
+                    self._answer_question(item.text)
+                except Exception:
+                    traceback.print_exc()
+                continue
             pcm_bytes, is_final = item
             try:
                 audio = pcm_bytes_to_float32(pcm_bytes)
@@ -121,22 +182,7 @@ class Worker(threading.Thread):
                 if not question.strip():
                     continue
 
-                self.overlay.begin_question(question)
-                if filler:
-                    self.overlay.append_text(f"{filler}\n\n")
-
-                try:
-                    answer_parts = []
-                    for chunk in stream_answer(question, self.context):
-                        answer_parts.append(chunk)
-                        self.overlay.append_text(chunk)
-                except Exception as exc:
-                    self.overlay.show_error(f"Ollama error: {exc}")
-                    continue
-
-                answer = "".join(answer_parts)
-                self.context = trim_context(self.context, f"Q: {question} A: {answer}")
-                self.logger.log(question, answer)
+                self._answer_question(question, filler)
             except Exception:
                 traceback.print_exc()
 
@@ -144,7 +190,7 @@ class Worker(threading.Thread):
 class CaptureThread(threading.Thread):
     def __init__(
         self,
-        utterance_queue: "queue.Queue[tuple[bytes, bool] | None]",
+        utterance_queue: "queue.Queue[WorkItem]",
         pa: pyaudio.PyAudio,
         device_index: int,
         overlay: OverlayWindow,
@@ -196,13 +242,16 @@ def main():
     _signal_timer.timeout.connect(lambda: None)
     _signal_timer.start(200)
 
-    overlay = OverlayWindow()
+    overlay = OverlayWindow(list_application_profiles())
     overlay.show()
 
     logger = SessionLogger(Path("sessions"))
-    utterance_queue: "queue.Queue[tuple[bytes, bool] | None]" = queue.Queue()
+    utterance_queue: "queue.Queue[WorkItem]" = queue.Queue()
 
     worker = Worker(utterance_queue, overlay, logger)
+    worker.set_profile(overlay.selected_profile())
+    overlay.manual_question_submitted.connect(worker.submit_manual_question)
+    overlay.profile_changed.connect(worker.set_profile)
     capture = CaptureThread(utterance_queue, pa, device_index, overlay)
     startup_cancelled = threading.Event()
     shutdown_started = threading.Event()

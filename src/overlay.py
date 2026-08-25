@@ -4,9 +4,11 @@ import sys
 from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -57,8 +59,10 @@ class OverlaySignals(QObject):
 
 class OverlayWindow(QWidget):
     quit_requested = pyqtSignal()
+    manual_question_submitted = pyqtSignal(str)
+    profile_changed = pyqtSignal(object)
 
-    def __init__(self):
+    def __init__(self, application_profiles: list[str] | None = None):
         super().__init__()
         self._history_started = False
         self.signals = OverlaySignals()
@@ -112,6 +116,26 @@ class OverlayWindow(QWidget):
         )
         self.close_button.clicked.connect(self.quit_requested.emit)
 
+        self.profile_label = QLabel("Profile")
+        self.profile_label.setStyleSheet(
+            "color: rgba(255, 255, 255, 180); font-size: 12px;"
+        )
+
+        self.profile_combo = QComboBox()
+        self.profile_combo.setToolTip(
+            "Only the selected application's résumé, JD, and notes are sent to the model."
+        )
+        self.profile_combo.addItem("Default", None)
+        for profile_name in application_profiles or []:
+            self.profile_combo.addItem(profile_name.replace("-", " "), profile_name)
+        self.profile_combo.setStyleSheet(
+            "QComboBox { background-color: rgba(255, 255, 255, 35); color: white;"
+            "border: 1px solid rgba(255, 255, 255, 45); border-radius: 5px;"
+            "padding: 3px 7px; font-size: 12px; }"
+            "QComboBox QAbstractItemView { background-color: #252525; color: white; }"
+        )
+        self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
+
         # The close button used to float directly on the translucent window
         # background with nothing behind it — effectively invisible over an
         # unpredictable desktop. Give it its own opaque header bar instead.
@@ -123,6 +147,8 @@ class OverlayWindow(QWidget):
         )
         header_layout = QHBoxLayout(self.header)
         header_layout.setContentsMargins(6, 4, 6, 4)
+        header_layout.addWidget(self.profile_label)
+        header_layout.addWidget(self.profile_combo)
         header_layout.addStretch()
         header_layout.addWidget(self.close_button)
 
@@ -133,14 +159,45 @@ class OverlayWindow(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setStyleSheet(
             "background: transparent;"
+        )
+
+        self.question_input = QLineEdit()
+        self.question_input.setPlaceholderText("Paste or type a question shown on screen…")
+        self.question_input.setClearButtonEnabled(True)
+        self.question_input.setStyleSheet(
+            "QLineEdit { background-color: rgba(255, 255, 255, 28); color: white;"
+            "border: 1px solid rgba(255, 255, 255, 45); border-radius: 6px;"
+            "padding: 7px; font-size: 13px; }"
+            "QLineEdit:focus { border-color: #7fb2ff; }"
+        )
+        self.question_input.returnPressed.connect(self._submit_manual_question)
+
+        self.generate_button = QPushButton("Generate")
+        self.generate_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.generate_button.setStyleSheet(
+            "QPushButton { background-color: #376ea8; color: white; border: none;"
+            "border-radius: 6px; padding: 7px 10px; font-size: 12px; }"
+            "QPushButton:hover { background-color: #4784c2; }"
+        )
+        self.generate_button.clicked.connect(self._submit_manual_question)
+
+        self.input_panel = QWidget()
+        self.input_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.input_panel.setStyleSheet(
+            "background-color: rgba(20, 20, 20, 220);"
             "border-bottom-left-radius: 10px; border-bottom-right-radius: 10px;"
         )
+        input_layout = QHBoxLayout(self.input_panel)
+        input_layout.setContentsMargins(8, 7, 8, 8)
+        input_layout.addWidget(self.question_input)
+        input_layout.addWidget(self.generate_button)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.header)
         layout.addWidget(self.scroll)
+        layout.addWidget(self.input_panel)
         self.setLayout(layout)
 
         self.setFixedWidth(480)
@@ -229,6 +286,19 @@ class OverlayWindow(QWidget):
         # Startup/listening statuses should not erase an active Q&A history.
         if not self._history_started:
             self.label.setText(html.escape(message))
+
+    def _submit_manual_question(self):
+        question = self.question_input.text().strip()
+        if not question:
+            return
+        self.question_input.clear()
+        self.manual_question_submitted.emit(question)
+
+    def _on_profile_changed(self):
+        self.profile_changed.emit(self.selected_profile())
+
+    def selected_profile(self) -> str | None:
+        return self.profile_combo.currentData()
 
     def _is_at_bottom(self) -> bool:
         bar = self.scroll.verticalScrollBar()

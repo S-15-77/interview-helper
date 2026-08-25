@@ -82,19 +82,25 @@ You'll select this device as your output before each session (step 5 below).
 
 ---
 
-## 3. Personalize your answers (optional, one-time)
+## 3. Personalize your answers (optional, per application)
 
 By default, the tool answers behavioral/HR questions ("Tell me about yourself") with generic
 placeholder scenarios — it doesn't know anything about you until you tell it.
 
-Open `my_data/profile.md` in any text editor and fill in your real name, role, experience,
-key projects, and where you want to be in 5 years. Every file in `my_data/` (you can add
-more, e.g. `target_job.txt` with a job posting you're prepping for) is read fresh before
-every answer, so there's nothing to restart. This folder never gets committed to git — it's
-your personal data, kept local to your machine.
+Create a separate application profile containing the exact resume and JD used for that role:
 
-Don't want to write it yourself? Open Claude Code in this folder, paste your resume or LinkedIn
-summary, and say *"fill in my_data/profile.md with this."*
+```
+mkdir -p my_data/applications
+cp -R templates/application_profile my_data/applications/acme-compiler-engineer
+```
+
+Edit `resume.md`, `job_description.md`, `technical_context.md`, and `star_stories.md` in the
+new directory. When the app starts, choose it from the **Profile** dropdown. Only the selected
+profile is loaded, and it is read fresh before every answer. See `my_data/README.md` for the
+file formats and a compiler-domain example.
+
+Don't want to write it yourself? Open Claude Code in this folder, paste your resume and JD,
+and ask it to fill the four files in your new application-profile directory.
 
 ## 4. Customize the coaching style (optional)
 
@@ -136,6 +142,9 @@ your call as normal. When your friend asks something, the app waits for
 ~1 second of silence, transcribes the question, and streams a coached answer
 into the overlay. Drag the header bar to move the window anywhere on screen,
 and click-drag over the answer text to select and copy it.
+
+For a question supplied as text, paste or type it into the field at the bottom of the
+overlay and press **Enter** or **Generate**. The exact text bypasses speech transcription.
 
 Each session's questions and answers are saved to a `sessions/` folder as a
 timestamped log.

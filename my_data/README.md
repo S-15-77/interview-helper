@@ -1,24 +1,78 @@
-# 🧠 Personal Knowledge Base
+# Personal Knowledge Base
 
-This folder (`my_data/`) is your AI's personal memory bank. The Interview Helper application will automatically read **every `.txt` and `.md` file** in this folder before answering a question. 
+The application reads Markdown and text files from `my_data/` immediately before each
+answer. You can update these files while the app is running; no restart is required.
+`README.md` files are documentation only and are never sent to the language model.
 
-By adding files here, you guarantee that the AI uses your exact resume, projects, and experiences to generate answers for behavioral and non-technical interview questions.
+## Recommended: one profile per application
 
-## How to Add Knowledge
+Keep each job description paired with the exact resume used for that application:
 
-1. **Create a File:** Create a new `.txt` or `.md` file in this folder.
-2. **Add Your Content:** Paste in any relevant information you want the AI to know.
-3. **That's It!** You do not need to restart the application. The AI reads this folder fresh every single time you ask a question.
+```text
+my_data/
+  applications/
+    acme-compiler-engineer/
+      job_description.md
+      resume.md
+      technical_context.md
+      star_stories.md
+    example-ml-engineer/
+      job_description.md
+      resume.md
+      technical_context.md
+      star_stories.md
+```
 
-## What Should I Put Here?
+Create a new profile from the reusable template:
 
-- **Your Resume:** We already have `profile.md` for this. Keep it updated with your latest experience.
-- **Project Deep-Dives:** Create a file like `project_hrdocu.md` and dump all your architecture decisions, challenges faced, and metrics achieved for that specific project.
-- **Job Descriptions:** Are you interviewing for a specific role? Copy/paste the job description into a file like `target_job.txt`. The AI will tailor your experience to match those exact requirements!
-- **Behavioral STAR Stories:** Write down raw notes about a time you failed, or a time you resolved a conflict (`star_stories.txt`). The AI will polish them into perfect spoken answers when asked.
+```bash
+mkdir -p my_data/applications
+cp -R templates/application_profile my_data/applications/acme-compiler-engineer
+```
 
-## ⚠️ Important Rules
+Rename the final directory for the company and role, then edit its four Markdown files.
+It will appear in the overlay's **Profile** dropdown the next time the app starts. Only the
+selected directory is loaded, so one role's JD, resume, and terminology cannot contaminate
+another role's answers. Switching profiles also clears recent conversation context.
 
-1. **Only text files:** The app currently only reads files ending in `.md` or `.txt`. Do not put PDFs, Word documents, or images in here.
-2. **Keep it concise:** Llama 3.2 is fast, but if you drop a 1,000-page book in here, it will slow down and might hit its context limit. Stick to your resume, cover letters, and project notes (ideally under 15-20 pages total).
-3. **File organization:** You can put files in subfolders inside `my_data/` if you want! The application will still find and read them automatically.
+## What each profile file does
+
+- `job_description.md`: the company, role, responsibilities, and requirements.
+- `resume.md`: the version of your resume submitted for this exact role.
+- `technical_context.md`: the role's domain and meanings of ambiguous terminology.
+- `star_stories.md`: real behavioral examples, individual actions, and measurable results.
+
+For a compiler role, `technical_context.md` might include:
+
+```markdown
+# Technical Context
+
+## Primary Domain
+
+Compilers and programming languages.
+
+## Term Disambiguation
+
+- IR / Intermediate Representation: compiler IR, not information retrieval.
+- Pass: a compiler analysis or transformation pass.
+- Lowering: converting a high-level IR into a lower-level representation.
+- SSA: Static Single Assignment form.
+- CFG: Control-Flow Graph.
+
+## Topics to Prioritize
+
+- ASTs, IR design, SSA, data-flow analysis, optimization, lowering,
+  code generation, LLVM IR, and MLIR.
+```
+
+## Default profile and backward compatibility
+
+Loose files such as `my_data/profile.md` still work and appear as **Default** in the
+dropdown. The Default profile intentionally ignores everything inside
+`my_data/applications/`; it never loads every saved application at once.
+
+## Privacy and file rules
+
+- Use `.md` or `.txt` files. PDFs, Word documents, and images are not read.
+- Keep the selected profile concise—ideally no more than 15-20 pages total.
+- `my_data/` is gitignored except for this README, so personal files are not committed.

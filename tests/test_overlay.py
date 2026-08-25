@@ -46,6 +46,29 @@ def test_status_updates_before_history_but_does_not_erase_answers():
     assert overlay.label.text() == history
 
 
+def test_manual_question_is_trimmed_submitted_and_cleared():
+    overlay = OverlayWindow()
+    submitted = []
+    overlay.manual_question_submitted.connect(submitted.append)
+    overlay.question_input.setText("  What is intermediate representation?  ")
+
+    QTest.keyClick(overlay.question_input, Qt.Key.Key_Return)
+
+    assert submitted == ["What is intermediate representation?"]
+    assert overlay.question_input.text() == ""
+
+
+def test_profile_selector_emits_internal_profile_name():
+    overlay = OverlayWindow(["compiler-role", "ml-role"])
+    selected = []
+    overlay.profile_changed.connect(selected.append)
+
+    overlay.profile_combo.setCurrentIndex(1)
+
+    assert overlay.selected_profile() == "compiler-role"
+    assert selected == ["compiler-role"]
+
+
 def test_native_window_is_marked_private(monkeypatch):
     calls = []
 

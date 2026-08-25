@@ -47,14 +47,13 @@ for use during a real employer interview.
 5. **Permissions:** the first time you run the app, macOS will prompt for
    microphone/audio permission for your terminal — allow it.
 
-6. **(Optional) Personalize answers with your real background:** drop
-   `.md`/`.txt` files into `my_data/` — a resume, project write-ups, a target
-   job description, STAR story notes. Every file in there is read fresh on
-   each question and used to ground behavioral/non-technical answers in your
-   actual experience instead of generic placeholders. See `my_data/README.md`
-   for details. This folder is gitignored (except its own README template)
-   so your personal data never gets committed. Don't want to write it by hand?
-   Ask Claude Code to draft it from your resume.
+6. **(Optional) Create an application profile:** copy
+   `templates/application_profile/` into `my_data/applications/<company-role>/`,
+   then add the exact resume, job description, technical domain notes, and STAR
+   stories for that application. Select it from the overlay's **Profile** dropdown.
+   Only the selected profile is sent to the model, and files are read fresh for
+   every question. See `my_data/README.md` for the complete format. `my_data/`
+   is gitignored so your personal information is not committed.
 
 7. **(Optional) Customize the coaching style:** drop `.md` files into
    `skills/` to teach the bot new rules or question-type playbooks (a "tell
@@ -89,6 +88,10 @@ with your friend (with system output set to the Multi-Output Device from
 step 3). When they ask a question, the app transcribes it after ~1s of
 silence and streams a coached answer onto the overlay. Each Q&A pair is
 logged to `sessions/<timestamp>.jsonl`.
+
+If a question is provided as text rather than spoken, paste or type it into the
+field at the bottom of the overlay and press **Enter** or **Generate**. This sends
+the exact text to the answer pipeline without speech transcription.
 
 To stop: click the **×** in the overlay's corner, or press `Ctrl+C` in the
 terminal.

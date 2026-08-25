@@ -1,8 +1,8 @@
 # Interview Skills
 
-Every `.md`/`.txt` file in this folder (recursively) is read fresh on each question and
-injected into the prompt right after the core system instructions — before your Candidate
-Profile and the conversation context. Add a new file here instead of editing
+Every `.md`/`.txt` file in this folder (recursively), except `README.md`, is read fresh on
+each question and injected into the prompt right after the core system instructions — before
+your Application Profile and the conversation context. Add a new file here instead of editing
 `SYSTEM_PROMPT` in `src/llm_client.py` when you want to teach the bot a new rule or
 question-type playbook.
 

@@ -4,7 +4,13 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from src.app import CaptureThread, Worker, pcm_bytes_to_float32, trim_context
+from src.app import (
+    CaptureThread,
+    ManualQuestion,
+    Worker,
+    pcm_bytes_to_float32,
+    trim_context,
+)
 
 
 def test_pcm_bytes_to_float32_scales_int16_range():
@@ -62,6 +68,41 @@ def test_final_utterance_takes_completed_filler_once():
 
     assert worker._take_current_filler() == "Let me think for a moment."
     assert worker._take_current_filler() == ""
+
+
+def test_manual_question_is_added_to_worker_queue():
+    work_queue = queue.Queue()
+    worker = Worker(work_queue, Mock(), Mock())
+
+    worker.submit_manual_question("  What is IR?  ")
+
+    assert work_queue.get_nowait() == ManualQuestion("What is IR?")
+
+
+def test_switching_application_profile_clears_conversation_context():
+    worker = Worker(queue.Queue(), Mock(), Mock())
+    worker.context = "previous ML discussion"
+
+    worker.set_profile("compiler-role")
+
+    assert worker._prompt_state() == ("", "compiler-role")
+
+
+def test_answer_uses_selected_application_profile():
+    overlay = Mock()
+    logger = Mock()
+    worker = Worker(queue.Queue(), overlay, logger)
+    worker.set_profile("compiler-role")
+
+    with patch("src.app.stream_answer", return_value=iter(["Compiler IR answer"])) as stream:
+        worker._answer_question("What is IR?")
+
+    stream.assert_called_once_with(
+        "What is IR?",
+        "",
+        profile_name="compiler-role",
+    )
+    logger.log.assert_called_once_with("What is IR?", "Compiler IR answer")
 
 
 def test_stopped_capture_thread_can_be_joined():

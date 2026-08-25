@@ -6,6 +6,8 @@ import requests
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_MODEL = "qwen2.5:3b-instruct"
+MY_DATA_DIR = Path("my_data")
+APPLICATIONS_DIR = MY_DATA_DIR / "applications"
 
 # SYSTEM_PROMPT = (
 #     "You are a world-class Software Engineering Interview Coach (ex-FAANG hiring manager). "
@@ -47,12 +49,17 @@ SYSTEM_PROMPT = (
     "engineer would say out loud, not academic or robotic prose.\n"
     "- Do: for behavioral/non-technical questions, use a seamless first-person STAR narrative "
     "(Situation, Task, Action, Result) without labeling the parts (never say 'The situation was...'); "
-    "make the Result concrete and quantifiable wherever the Candidate Profile supports it (time saved, "
+    "make the Result concrete and quantifiable wherever the Application Profile supports it (time saved, "
     "percent improvement, scale handled) rather than a vague 'it went well.'\n"
     "- Do: when a story involves a past employer, team, or leaving a role, stay positive — frame it as "
     "seeking a new challenge or growth, never as complaining about the employer, manager, or team.\n"
-    "- Do: if the Candidate Profile includes a target job description, explicitly connect the answer to "
+    "- Do: if the Application Profile includes a target job description, explicitly connect the answer to "
     "how the candidate's real skills/experience address what that specific role needs.\n"
+    "- Do: resolve ambiguous technical terms using the active Application Profile. Prefer the explicit "
+    "wording of the question first, then the target job's technical domain and technical_context.md, "
+    "then recent conversation. For a compiler-focused profile, terms such as IR, intermediate "
+    "representation, lowering, passes, SSA, and CFG refer to compiler concepts unless the question "
+    "explicitly establishes another domain.\n"
     "- Do: for technical questions — DSA/algorithms: state the optimal approach immediately, then "
     "its time/space complexity (pseudocode only if essential, max 3-4 lines); system design: outline "
     "the high-level architecture, justify the main component choices, name one key trade-off; "
@@ -63,27 +70,28 @@ SYSTEM_PROMPT = (
     "- Do NOT ask the interviewer a question back or invite their reaction ('What do you think?', "
     "'Does that make sense?') — the one exception is when the question itself was 'Do you have any "
     "questions for us?', where asking questions back is literally the answer.\n"
-    "- Do NOT turn background/self-intro questions into an inventory of every fact in the Candidate "
+    "- Do NOT turn background/self-intro questions into an inventory of every fact in the Application "
     "Profile ('I've also worked on X. I'm also involved in Y.') — that reads like a resume readout, "
     "not a person talking. Pick the 2-3 points most relevant to what was asked and connect them into "
     "one flowing story with a clear thread, the way someone would actually introduce themselves. "
     "Still use the full ~150-200 word budget — go deeper on the points you pick (what you built, why "
     "it mattered, a concrete detail) rather than trimming to fewer words.\n"
     "- Do NOT invent facts: base technical claims on real, verified computer science principles and "
-    "language/system specs, never fake APIs or unproven techniques; if the Candidate Profile below "
+    "language/system specs, never fake APIs or unproven techniques; if the Application Profile below "
     "doesn't cover something personal, use a standard, believable placeholder scenario (a production "
     "outage, a legacy refactor, a slow query) instead of fabricating specifics.\n"
     "- Do NOT exceed ~150-200 words — this must be skimmable and speakable in under a minute.\n\n"
     "# 3. Scope & Edge Case Handling\n"
-    "- The question you receive comes from live speech-to-text and can occasionally be garbled, cut "
-    "off, or not really a question (background noise, cross-talk). If it's ambiguous, answer your "
+    "- The question you receive may come from live speech-to-text or exact text pasted by the user. "
+    "Speech transcripts can occasionally be garbled, cut off, or not really a question (background "
+    "noise, cross-talk). If it's ambiguous, answer your "
     "best-guess interpretation of the most likely intended question rather than inventing an answer "
     "to something that wasn't really asked.\n"
     "- If the transcript is too fragmentary to mean anything at all, respond with a brief, honest "
     "line saying the question wasn't clear, instead of producing a confident answer to noise.\n\n"
     "# 4. Context & Available Data\n"
-    "You may receive, in this order: a Candidate Profile (the user's real background, from "
-    "profile.md, when available), the last ~200 words of the conversation for context, and the "
+    "You may receive, in this order: an Application Profile (the user's selected resume, target "
+    "job description, domain notes, and real background), the last ~200 words of the conversation, and the "
     "question just asked. You have no other knowledge of the candidate beyond what's given here.\n\n"
     "# 5. Output Format\n"
     "Output ONLY the exact words the user should speak out loud. Do not include notes, tips, "
@@ -115,18 +123,40 @@ SYSTEM_PROMPT = (
     "repeat-free exists, I'd return null or an empty result.</output>\n"
     "</example>\n"
     "<example>\n"
+    "<input>What is Intermediate Representation?</input>\n"
+    "<output>An Intermediate Representation, or IR, is the compiler's internal form of a program "
+    "between the source language and final machine code. It gives analysis and optimization passes "
+    "a stable structure to work on without depending directly on either source syntax or a specific "
+    "target architecture. IRs can exist at several levels: an AST is relatively high-level, SSA-based "
+    "IRs make data-flow analysis easier, and lower-level forms sit closer to machine instructions. "
+    "LLVM IR and MLIR are common examples. The main benefit is reuse: the same optimization pipeline "
+    "can support multiple source languages and hardware targets.</output>\n"
+    "</example>\n"
+    "<example>\n"
     "<input>so yeah like the uh thing with the the</input>\n"
     "<output>Sorry, I didn't catch a clear question there — could you say that again?</output>\n"
     "</example>"
 )
 
-def _read_markdown_dir(dir_path: Path) -> str:
+def _read_markdown_dir(
+    dir_path: Path,
+    *,
+    excluded_dirs: set[str] | None = None,
+) -> str:
     if not dir_path.exists() or not dir_path.is_dir():
         return ""
 
+    excluded_dirs = excluded_dirs or set()
     docs = []
     for file_path in sorted(dir_path.glob("**/*")):
-        if file_path.is_file() and file_path.suffix in (".md", ".txt"):
+        relative_parts = file_path.relative_to(dir_path).parts
+        if any(part in excluded_dirs for part in relative_parts[:-1]):
+            continue
+        if (
+            file_path.is_file()
+            and file_path.suffix.lower() in (".md", ".txt")
+            and file_path.name.lower() != "readme.md"
+        ):
             try:
                 content = file_path.read_text(encoding="utf-8").strip()
                 if content:
@@ -137,21 +167,71 @@ def _read_markdown_dir(dir_path: Path) -> str:
     return "\n\n".join(docs)
 
 
-def load_knowledge_base() -> str:
-    return _read_markdown_dir(Path("my_data"))
+def list_application_profiles(applications_dir: Path = APPLICATIONS_DIR) -> list[str]:
+    if not applications_dir.exists() or not applications_dir.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in applications_dir.iterdir()
+        if path.is_dir()
+        and any(
+            child.is_file()
+            and child.suffix.lower() in (".md", ".txt")
+            and child.name.lower() != "readme.md"
+            for child in path.glob("**/*")
+        )
+    )
+
+
+def _application_profile_dir(
+    profile_name: str,
+    applications_dir: Path = APPLICATIONS_DIR,
+) -> Path:
+    if (
+        not profile_name
+        or profile_name in {".", ".."}
+        or Path(profile_name).name != profile_name
+    ):
+        raise ValueError(f"Invalid application profile name: {profile_name!r}")
+    applications_root = applications_dir.resolve()
+    profile_dir = (applications_root / profile_name).resolve()
+    if profile_dir.parent != applications_root:
+        raise ValueError(f"Invalid application profile name: {profile_name!r}")
+    if not profile_dir.is_dir():
+        raise ValueError(f"Application profile does not exist: {profile_name}")
+    return profile_dir
+
+
+def load_knowledge_base(
+    profile_name: str | None = None,
+    *,
+    my_data_dir: Path = MY_DATA_DIR,
+    applications_dir: Path | None = None,
+) -> str:
+    if profile_name:
+        profile_root = applications_dir or my_data_dir / "applications"
+        return _read_markdown_dir(_application_profile_dir(profile_name, profile_root))
+
+    # Backward-compatible default: load loose files such as my_data/profile.md,
+    # but never mix in every saved application profile.
+    return _read_markdown_dir(my_data_dir, excluded_dirs={"applications"})
 
 
 def load_skills() -> str:
     return _read_markdown_dir(Path("skills"))
 
 
-def build_prompt(context: str, question: str) -> str:
+def build_prompt(context: str, question: str, profile_name: str | None = None) -> str:
     context = context.strip()
-    kb_data = load_knowledge_base()
+    kb_data = load_knowledge_base(profile_name)
     skills_data = load_skills()
 
     skills_block = f"{skills_data}\n\n" if skills_data else ""
-    kb_block = f"Candidate Profile:\n{kb_data}\n\n" if kb_data else ""
+    if kb_data:
+        profile_label = profile_name or "default"
+        kb_block = f"Active Application Profile ({profile_label}):\n{kb_data}\n\n"
+    else:
+        kb_block = ""
     context_block = f"Recent conversation:\n{context}\n\n" if context else ""
     return f"{SYSTEM_PROMPT}\n\n{skills_block}{kb_block}{context_block}Question: {question}\n\nAnswer:"
 
@@ -191,10 +271,15 @@ def generate_filler(partial_question: str, model: str = DEFAULT_MODEL) -> str:
         return "That's a great question, let me think..."
 
 
-def stream_answer(question: str, context: str = "", model: str = DEFAULT_MODEL) -> Iterator[str]:
+def stream_answer(
+    question: str,
+    context: str = "",
+    model: str = DEFAULT_MODEL,
+    profile_name: str | None = None,
+) -> Iterator[str]:
     payload = {
         "model": model,
-        "prompt": build_prompt(context, question),
+        "prompt": build_prompt(context, question, profile_name),
         "stream": True,
         # num_predict bounds worst-case generation time — the system prompt already
         # targets ~150-200 words, this just stops a runaway answer from tacking on

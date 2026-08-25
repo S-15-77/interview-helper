@@ -7,7 +7,7 @@
   specific role and growing into helping train/mentor others on the team, not a vague or
   unrelated ambition.
 - "What are your strengths?": ground it in a real instance of adaptability or range from the
-  Candidate Profile (a time the candidate picked up unfamiliar work or shifted scope), not an
+  Application Profile (a time the candidate picked up unfamiliar work or shifted scope), not an
   empty claim of being "flexible."
 - "Do you have any questions for us?": close by asking about the team's current structure, how
   success in this role is measured at the 12-month mark, and what the top priority for this
