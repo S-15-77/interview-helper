@@ -52,6 +52,7 @@ class OverlaySignals(QObject):
     question_started = pyqtSignal(str)
     text_appended = pyqtSignal(str)
     error_shown = pyqtSignal(str)
+    status_changed = pyqtSignal(str)
 
 
 class OverlayWindow(QWidget):
@@ -64,6 +65,7 @@ class OverlayWindow(QWidget):
         self.signals.question_started.connect(self._on_question_started)
         self.signals.text_appended.connect(self._on_text_appended)
         self.signals.error_shown.connect(self._on_error_shown)
+        self.signals.status_changed.connect(self._on_status_changed)
 
         # ponytail: no Qt.WindowType.Tool here on purpose — Qt maps Tool to a
         # native NSPanel (QNSPanel) and keeps re-asserting its own "tool
@@ -85,7 +87,7 @@ class OverlayWindow(QWidget):
 
         self.label = QLabel("")
         self.label.setTextFormat(Qt.TextFormat.RichText)
-        self.label.setText("Listening…")
+        self.label.setText("Starting…")
         self.label.setWordWrap(True)
         # QLabel defaults to vertically-centered text; once the scroll area
         # below stretches this label to fill the box, centered text left a
@@ -223,6 +225,11 @@ class OverlayWindow(QWidget):
         if follow:
             self._scroll_to_bottom()
 
+    def _on_status_changed(self, message: str):
+        # Startup/listening statuses should not erase an active Q&A history.
+        if not self._history_started:
+            self.label.setText(html.escape(message))
+
     def _is_at_bottom(self) -> bool:
         bar = self.scroll.verticalScrollBar()
         return bar.value() >= bar.maximum() - 4
@@ -242,3 +249,6 @@ class OverlayWindow(QWidget):
 
     def show_error(self, message: str):
         self.signals.error_shown.emit(message)
+
+    def show_status(self, message: str):
+        self.signals.status_changed.emit(message)

@@ -57,3 +57,15 @@ def test_stream_answer_yields_chunks_and_stops_at_done():
 
     assert chunks == ["Hello", " world"]
     mock_response.raise_for_status.assert_called_once()
+
+
+def test_stream_answer_caps_generated_tokens():
+    done_line = json.dumps({"response": "", "done": True}).encode()
+    mock_response = MagicMock()
+    mock_response.__enter__.return_value = mock_response
+    mock_response.iter_lines.return_value = [done_line]
+
+    with patch("src.llm_client.requests.post", return_value=mock_response) as post:
+        list(stream_answer("What is a hash map?"))
+
+    assert post.call_args.kwargs["json"]["options"]["num_predict"] == 320

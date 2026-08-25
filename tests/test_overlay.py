@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
@@ -27,6 +31,19 @@ def test_label_text_is_selectable():
     overlay = OverlayWindow()
     flags = overlay.label.textInteractionFlags()
     assert flags & Qt.TextInteractionFlag.TextSelectableByMouse
+
+
+def test_status_updates_before_history_but_does_not_erase_answers():
+    overlay = OverlayWindow()
+
+    overlay._on_status_changed("Loading speech model…")
+    assert overlay.label.text() == "Loading speech model…"
+
+    overlay._on_question_started("Tell me about yourself")
+    history = overlay.label.text()
+    overlay._on_status_changed("Listening…")
+
+    assert overlay.label.text() == history
 
 
 def test_native_window_is_marked_private(monkeypatch):

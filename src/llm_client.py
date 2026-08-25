@@ -199,7 +199,10 @@ def stream_answer(question: str, context: str = "", model: str = DEFAULT_MODEL) 
         # num_predict bounds worst-case generation time — the system prompt already
         # targets ~150-200 words, this just stops a runaway answer from tacking on
         # extra seconds of unbounded generation.
-        "options": {"temperature": 0.1,},
+        "options": {
+            "temperature": 0.1,
+            "num_predict": 320,
+        },
     }
     with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=60) as response:
         response.raise_for_status()

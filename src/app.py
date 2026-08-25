@@ -38,47 +38,93 @@ def trim_context(context: str, new_text: str, word_limit: int = CONTEXT_WORD_LIM
 
 
 class Worker(threading.Thread):
-    def __init__(self, utterance_queue: "queue.Queue[tuple[bytes, bool]]", overlay: OverlayWindow, logger: SessionLogger):
+    def __init__(
+        self,
+        utterance_queue: "queue.Queue[tuple[bytes, bool] | None]",
+        overlay: OverlayWindow,
+        logger: SessionLogger,
+    ):
         super().__init__(daemon=True)
         self.utterance_queue = utterance_queue
         self.overlay = overlay
         self.logger = logger
         self.context = ""
         self.current_filler = ""
-        self._partial_thread = None
+        self._partial_thread: threading.Thread | None = None
+        self._partial_generation = 0
+        self._partial_lock = threading.Lock()
 
-    def _process_partial(self, audio: np.ndarray):
+    def _process_partial(self, audio: np.ndarray, generation: int):
         try:
             partial_question = transcribe(audio, SAMPLE_RATE)
             if partial_question.strip():
                 from src.llm_client import generate_filler
+
                 filler = generate_filler(partial_question)
-                self.current_filler = filler
+                with self._partial_lock:
+                    # The final utterance may have arrived while transcription or
+                    # generation was running. Never let that stale result leak into
+                    # the next question.
+                    if generation == self._partial_generation:
+                        self.current_filler = filler
         except Exception as e:
             print(f"Partial transcription error: {e}")
 
+    def _start_partial(self, audio: np.ndarray) -> None:
+        with self._partial_lock:
+            # One useful filler is enough. Re-transcribing every cumulative partial
+            # wastes CPU and can slow down the final answer.
+            if self.current_filler or (
+                self._partial_thread is not None and self._partial_thread.is_alive()
+            ):
+                return
+            self._partial_generation += 1
+            generation = self._partial_generation
+            thread = threading.Thread(
+                target=self._process_partial,
+                args=(audio, generation),
+                daemon=True,
+            )
+            self._partial_thread = thread
+        thread.start()
+
+    def _take_current_filler(self) -> str:
+        with self._partial_lock:
+            # Invalidate any in-flight partial before processing the final audio.
+            self._partial_generation += 1
+            filler = self.current_filler
+            self.current_filler = ""
+            self._partial_thread = None
+            return filler
+
+    def stop(self) -> None:
+        with self._partial_lock:
+            self._partial_generation += 1
+            self.current_filler = ""
+        self.utterance_queue.put(None)
+
     def run(self):
         while True:
-            pcm_bytes, is_final = self.utterance_queue.get()
+            item = self.utterance_queue.get()
+            if item is None:
+                return
+            pcm_bytes, is_final = item
             try:
                 audio = pcm_bytes_to_float32(pcm_bytes)
-                
+
                 if not is_final:
-                    self.current_filler = ""
-                    self._partial_thread = threading.Thread(target=self._process_partial, args=(audio,), daemon=True)
-                    self._partial_thread.start()
+                    self._start_partial(audio)
                     continue
-                    
+
+                filler = self._take_current_filler()
                 question = transcribe(audio, SAMPLE_RATE)
                 if not question.strip():
-                    self.current_filler = ""
                     continue
 
                 self.overlay.begin_question(question)
-                if self.current_filler:
-                    self.overlay.append_text(f"<i>{self.current_filler}</i>\n\n")
-                    self.current_filler = ""
-                    
+                if filler:
+                    self.overlay.append_text(f"{filler}\n\n")
+
                 try:
                     answer_parts = []
                     for chunk in stream_answer(question, self.context):
@@ -98,7 +144,7 @@ class Worker(threading.Thread):
 class CaptureThread(threading.Thread):
     def __init__(
         self,
-        utterance_queue: "queue.Queue[tuple[bytes, bool]]",
+        utterance_queue: "queue.Queue[tuple[bytes, bool] | None]",
         pa: pyaudio.PyAudio,
         device_index: int,
         overlay: OverlayWindow,
@@ -108,28 +154,31 @@ class CaptureThread(threading.Thread):
         self.pa = pa
         self.device_index = device_index
         self.overlay = overlay
-        self._stop = threading.Event()
+        # threading.Thread already owns a private _stop() method used by join().
+        # Shadowing it with an Event makes a completed capture thread unjoinable.
+        self._stop_event = threading.Event()
 
     def run(self):
         pa = self.pa
+        stream = None
         try:
             stream = open_capture_stream(pa, self.device_index)
             segmenter = UtteranceSegmenter()
-            try:
-                while not self._stop.is_set():
-                    frame = stream.read(FRAME_SIZE, exception_on_overflow=False)
-                    utterance = segmenter.push_frame(frame)
-                    if utterance is not None:
-                        self.utterance_queue.put(utterance)
-            finally:
-                stream.stop_stream()
-                stream.close()
-                pa.terminate()
+            while not self._stop_event.is_set():
+                frame = stream.read(FRAME_SIZE, exception_on_overflow=False)
+                utterance = segmenter.push_frame(frame)
+                if utterance is not None:
+                    self.utterance_queue.put(utterance)
         except Exception as exc:
             self.overlay.show_error(f"Audio capture stopped: {exc}")
+        finally:
+            if stream is not None:
+                stream.stop_stream()
+                stream.close()
+            pa.terminate()
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
 
 
 def main():
@@ -137,6 +186,7 @@ def main():
     try:
         device_index = find_device_index(pa)
     except RuntimeError as exc:
+        pa.terminate()
         print(exc, file=sys.stderr)
         sys.exit(1)
 
@@ -149,27 +199,67 @@ def main():
     overlay = OverlayWindow()
     overlay.show()
 
-    preload_transcriber()
-    preload_llm()
-
     logger = SessionLogger(Path("sessions"))
-    utterance_queue: "queue.Queue[tuple[bytes, bool]]" = queue.Queue()
+    utterance_queue: "queue.Queue[tuple[bytes, bool] | None]" = queue.Queue()
 
     worker = Worker(utterance_queue, overlay, logger)
-    worker.start()
-
     capture = CaptureThread(utterance_queue, pa, device_index, overlay)
-    capture.start()
+    startup_cancelled = threading.Event()
+    shutdown_started = threading.Event()
+    lifecycle_lock = threading.Lock()
+
+    def initialize_services():
+        try:
+            overlay.show_status("Loading speech model…")
+            preload_transcriber()
+            if startup_cancelled.is_set():
+                return
+
+            overlay.show_status("Loading language model…")
+            preload_llm()
+            if startup_cancelled.is_set():
+                return
+
+            # Starting and stopping share this lock so closing the app during
+            # initialization cannot start capture on an already-terminated
+            # PyAudio instance.
+            with lifecycle_lock:
+                if startup_cancelled.is_set():
+                    return
+                worker.start()
+                capture.start()
+            overlay.show_status("Listening…")
+        except Exception as exc:
+            if not startup_cancelled.is_set():
+                pa.terminate()
+                overlay.show_error(f"Startup failed: {exc}")
+
+    startup_thread = threading.Thread(target=initialize_services, daemon=True)
+    startup_thread.start()
 
     def handle_sigint(*_args):
+        if shutdown_started.is_set():
+            return
+        shutdown_started.set()
+        startup_cancelled.set()
         # Without this, Ctrl+C's default handler raises KeyboardInterrupt
         # from inside whatever Qt slot happens to be running when the
         # signal is noticed (here, the timer below) — PyQt6 treats any
         # exception escaping a slot as fatal and calls abort(). Stop the
         # audio stream deterministically first, then quit Qt normally
         # instead of letting a KeyboardInterrupt raise at all.
-        capture.stop()
-        capture.join(timeout=2)
+        with lifecycle_lock:
+            capture.stop()
+            capture_was_started = capture.ident is not None
+            worker_was_started = worker.ident is not None
+            if worker_was_started:
+                worker.stop()
+            if not capture_was_started:
+                pa.terminate()
+        if capture.is_alive():
+            capture.join(timeout=2)
+        if worker.is_alive():
+            worker.join(timeout=1)
         app.quit()
 
     signal.signal(signal.SIGINT, handle_sigint)
