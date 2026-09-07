@@ -19,6 +19,42 @@ def test_build_prompt_includes_question_and_star_guidance():
     assert "STAR" in prompt
 
 
+def test_prompt_limits_product_to_consensual_mock_interview_practice():
+    prompt = build_prompt(context="", question="Tell me about yourself.")
+
+    assert "only for practice with a consenting friend" in prompt
+    assert "never for use during a real employer interview" in prompt
+    assert "actual or mock interview" not in prompt
+
+
+def test_prompt_describes_the_audio_source_accurately():
+    prompt = build_prompt(context="", question="What is a hash map?")
+
+    assert "friend's voice is captured from the call's system audio" in prompt
+    assert "BlackHole virtual audio device" in prompt
+    assert "never hear the candidate's microphone" in prompt
+
+
+def test_prompt_forbids_fabricated_personal_experience():
+    prompt = build_prompt(context="", question="Tell me about a conflict at work.")
+
+    assert "Do NOT invent personal facts" in prompt
+    assert "Every personal claim must be supported by the Application Profile" in prompt
+    assert "Never present a generic or plausible scenario" in prompt
+    assert "standard, believable placeholder scenario" not in prompt
+
+
+def test_prompt_requires_a_clearly_marked_framework_when_evidence_is_missing():
+    prompt = build_prompt(context="", question="Tell me about a conflict at work.")
+
+    assert "PRACTICE FRAMEWORK — NOT READY TO SPEAK" in prompt
+    assert "Situation: [real context]" in prompt
+    assert "Task: [your real responsibility]" in prompt
+    assert "Action: [specific actions you personally took]" in prompt
+    assert "Result: [real, supportable outcome]" in prompt
+    assert "Add this completed story to star_stories.md" in prompt
+
+
 def test_build_prompt_includes_context_block_when_present():
     prompt = build_prompt(
         context="Interviewer: let's talk about teamwork.",

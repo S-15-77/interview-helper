@@ -22,15 +22,15 @@ Complete these before adding large new features.
 
 ### Align the prompt with the product purpose
 
-- [ ] Replace the prompt's "actual or mock interview" language with mock-interview-only
+- [x] Replace the prompt's "actual or mock interview" language with mock-interview-only
       language.
-- [ ] Correct the prompt's description of the audio source: the app currently captures the
+- [x] Correct the prompt's description of the audio source: the app currently captures the
       interviewer's call audio through BlackHole, not the candidate's microphone.
-- [ ] Stop presenting invented placeholder stories as if they were real candidate
+- [x] Stop presenting invented placeholder stories as if they were real candidate
       experiences.
-- [ ] When profile details are missing, produce a clearly marked answer framework or ask the
+- [x] When profile details are missing, produce a clearly marked answer framework or ask the
       candidate to add a relevant STAR story.
-- [ ] Add tests that verify these constraints are present in the generated prompt.
+- [x] Add tests that verify these constraints are present in the generated prompt.
 
 ### Prevent stale or overlapping answers
 
