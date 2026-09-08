@@ -48,10 +48,10 @@ can wait behind old work and produce answers after they are no longer useful.
 
 ### Improve transcript confidence
 
-- [ ] Show the detected question before or while an answer is generated.
-- [ ] Let the user correct a bad transcript and regenerate.
-- [ ] Add a Retry Transcription action.
-- [ ] Consider using transcription confidence or no-speech probability to reject uncertain
+- [x] Show the detected question before or while an answer is generated.
+- [x] Let the user correct a bad transcript and regenerate.
+- [x] Add a Retry Transcription action.
+- [x] Consider using transcription confidence or no-speech probability to reject uncertain
       results.
 
 ## Priority 1: Essential live controls

@@ -7,12 +7,14 @@ from src.app import (
     AudioWork,
     CaptureThread,
     ManualQuestion,
+    RetryTranscription,
     Worker,
     WorkQueue,
     normalize_question,
     pcm_bytes_to_float32,
     trim_context,
 )
+from src.transcriber import TranscriptionResult
 
 
 def test_pcm_bytes_to_float32_scales_int16_range():
@@ -139,6 +141,21 @@ def test_manual_question_replaces_audio_and_supersedes_active_work():
     assert work_queue.get() == ManualQuestion("Typed question")
 
 
+def test_retry_transcription_replaces_queued_audio_as_priority_work():
+    work_queue = WorkQueue()
+    superseded = Mock()
+    work_queue.set_supersede_callback(superseded)
+    old_audio = AudioWork(b"old", True, 1.0)
+    retry_audio = AudioWork(b"retry", True, 2.0)
+    work_queue.submit_audio(old_audio)
+
+    assert work_queue.submit_retry(RetryTranscription(retry_audio))
+    assert not work_queue.submit_audio(AudioWork(b"later", True, 3.0))
+
+    superseded.assert_called_once_with()
+    assert work_queue.get() == RetryTranscription(retry_audio)
+
+
 def test_question_normalization_ignores_case_spacing_and_punctuation():
     assert normalize_question("  What IS an IR?! ") == "what is an ir"
 
@@ -160,7 +177,10 @@ def test_audio_pipeline_reports_states_and_logs_all_timings():
     logger.log.side_effect = lambda *_args, **_kwargs: answer_logged.set()
 
     with (
-        patch("src.app.transcribe", return_value="What is IR?"),
+        patch(
+            "src.app.transcribe_with_metadata",
+            return_value=TranscriptionResult("What is IR?", 0.9, 0.05),
+        ),
         patch("src.app.stream_answer", return_value=iter(["An IR is..."])),
     ):
         worker.start()
@@ -173,6 +193,7 @@ def test_audio_pipeline_reports_states_and_logs_all_timings():
     assert "Transcribing…" in statuses
     assert "Generating…" in statuses
     assert statuses[-1].startswith("Listening • first ")
+    overlay.show_transcript.assert_called_once_with("What is IR?", 0.9, 0.05, True)
     timings = logger.log.call_args.kwargs["timings"]
     assert timings["source"] == "audio"
     assert timings["transcription_ms"] >= 0
@@ -197,7 +218,10 @@ def test_duplicate_audio_transcription_does_not_generate_another_answer():
     overlay.show_status.side_effect = observe_status
 
     with (
-        patch("src.app.transcribe", return_value="What is IR?"),
+        patch(
+            "src.app.transcribe_with_metadata",
+            return_value=TranscriptionResult("What is IR?", 0.9, 0.05),
+        ),
         patch("src.app.stream_answer", return_value=iter(["An IR is..."])) as stream,
     ):
         worker.start()
@@ -210,6 +234,103 @@ def test_duplicate_audio_transcription_does_not_generate_another_answer():
 
     stream.assert_called_once()
     logger.log.assert_called_once()
+
+
+def test_low_confidence_transcript_is_shown_but_not_answered():
+    work_queue = WorkQueue()
+    overlay = Mock()
+    logger = Mock()
+    worker = Worker(work_queue, overlay, logger)
+    confidence_review_shown = threading.Event()
+
+    def observe_status(message):
+        if message == "Review transcript • low confidence":
+            confidence_review_shown.set()
+
+    overlay.show_status.side_effect = observe_status
+    result = TranscriptionResult("Was that hash map?", 0.12, 0.8)
+
+    with (
+        patch("src.app.transcribe_with_metadata", return_value=result),
+        patch("src.app.stream_answer") as stream,
+    ):
+        worker.start()
+        work_queue.submit_audio(AudioWork(b"\x00\x00", True, 10.0))
+        assert confidence_review_shown.wait(timeout=1)
+        worker.stop()
+        worker.join(timeout=1)
+
+    overlay.show_transcript.assert_called_once_with(
+        "Was that hash map?",
+        0.12,
+        0.8,
+        False,
+    )
+    stream.assert_not_called()
+    logger.log.assert_not_called()
+
+
+def test_corrected_transcript_cancels_old_work_and_generates_answer():
+    work_queue = WorkQueue()
+    overlay = Mock()
+    logger = Mock()
+    worker = Worker(work_queue, overlay, logger)
+    corrected_logged = threading.Event()
+    logger.log.side_effect = lambda *_args, **_kwargs: corrected_logged.set()
+
+    with patch("src.app.stream_answer", return_value=iter(["Corrected answer"])):
+        worker.start()
+        worker.submit_transcript_correction("  What is a hash map?  ")
+        assert corrected_logged.wait(timeout=1)
+        worker.stop()
+        worker.join(timeout=1)
+
+    overlay.begin_question.assert_called_once_with("What is a hash map?")
+    assert logger.log.call_args.kwargs["timings"]["source"] == "correction"
+
+
+def test_retry_transcription_reuses_audio_and_bypasses_duplicate_filter():
+    work_queue = WorkQueue()
+    overlay = Mock()
+    logger = Mock()
+    worker = Worker(work_queue, overlay, logger)
+    review_shown = threading.Event()
+    retry_logged = threading.Event()
+    results = [
+        TranscriptionResult("What is IR?", 0.1, 0.8),
+        TranscriptionResult("What is IR?", 0.9, 0.05),
+    ]
+
+    def observe_status(message):
+        if message == "Review transcript • low confidence":
+            review_shown.set()
+
+    overlay.show_status.side_effect = observe_status
+    logger.log.side_effect = lambda *_args, **_kwargs: retry_logged.set()
+
+    with (
+        patch("src.app.transcribe_with_metadata", side_effect=results) as transcribe,
+        patch("src.app.stream_answer", return_value=iter(["An IR is..."])),
+    ):
+        worker.start()
+        work_queue.submit_audio(AudioWork(b"\x00\x00", True, 10.0))
+        assert review_shown.wait(timeout=1)
+        worker.retry_last_transcription()
+        assert retry_logged.wait(timeout=1)
+        worker.stop()
+        worker.join(timeout=1)
+
+    assert transcribe.call_count == 2
+    assert logger.log.call_args.kwargs["timings"]["source"] == "audio_retry"
+
+
+def test_retry_without_captured_audio_reports_that_nothing_is_available():
+    overlay = Mock()
+    worker = Worker(WorkQueue(), overlay, Mock())
+
+    worker.retry_last_transcription()
+
+    overlay.show_status.assert_called_once_with("Listening • no transcript to retry")
 
 
 def test_manual_question_cancels_active_answer_and_runs_next():

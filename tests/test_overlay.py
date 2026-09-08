@@ -81,6 +81,63 @@ def test_cancelled_answer_is_marked_in_history():
     assert "Answer cancelled." in overlay.label.text()
 
 
+def test_detected_transcript_is_visible_with_confidence():
+    overlay = OverlayWindow()
+
+    overlay._on_transcript_detected("What is IR?", 0.82, 0.06, True)
+
+    assert not overlay.transcript_panel.isHidden()
+    assert overlay.transcript_input.text() == "What is IR?"
+    assert "Ready" in overlay.transcript_label.text()
+    assert "confidence 82%" in overlay.transcript_label.text()
+    assert "no-speech 6%" in overlay.transcript_label.text()
+
+
+def test_low_confidence_transcript_requests_review():
+    overlay = OverlayWindow()
+
+    overlay._on_transcript_detected("Was that IR?", 0.2, 0.75, False)
+
+    assert "Review before generating" in overlay.transcript_label.text()
+    assert overlay.regenerate_button.isEnabled()
+
+
+def test_edited_transcript_can_be_submitted_for_regeneration():
+    overlay = OverlayWindow()
+    submitted = []
+    overlay.transcript_correction_submitted.connect(submitted.append)
+    overlay._on_transcript_detected("What is eye are?", 0.3, 0.2, False)
+    overlay.transcript_input.setText("  What is IR?  ")
+
+    QTest.mouseClick(overlay.regenerate_button, Qt.MouseButton.LeftButton)
+
+    assert submitted == ["What is IR?"]
+
+
+def test_retry_transcription_button_emits_request():
+    overlay = OverlayWindow()
+    requested = []
+    overlay.retry_transcription_requested.connect(lambda: requested.append(True))
+    overlay._on_transcript_detected("Was that IR?", 0.3, 0.2, False)
+
+    QTest.mouseClick(
+        overlay.retry_transcription_button,
+        Qt.MouseButton.LeftButton,
+    )
+
+    assert requested == [True]
+
+
+def test_transcript_preview_can_be_cleared():
+    overlay = OverlayWindow()
+    overlay._on_transcript_detected("What is IR?", 0.9, 0.05, True)
+
+    overlay._on_transcript_cleared()
+
+    assert overlay.transcript_panel.isHidden()
+    assert overlay.transcript_input.text() == ""
+
+
 def test_manual_question_is_trimmed_submitted_and_cleared():
     overlay = OverlayWindow()
     submitted = []

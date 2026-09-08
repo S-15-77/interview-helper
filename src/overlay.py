@@ -54,6 +54,8 @@ class OverlaySignals(QObject):
     question_started = pyqtSignal(str)
     text_appended = pyqtSignal(str)
     answer_cancelled = pyqtSignal()
+    transcript_detected = pyqtSignal(str, float, float, bool)
+    transcript_cleared = pyqtSignal()
     error_shown = pyqtSignal(str)
     status_changed = pyqtSignal(str)
 
@@ -62,6 +64,8 @@ class OverlayWindow(QWidget):
     quit_requested = pyqtSignal()
     cancel_requested = pyqtSignal()
     manual_question_submitted = pyqtSignal(str)
+    transcript_correction_submitted = pyqtSignal(str)
+    retry_transcription_requested = pyqtSignal()
     profile_changed = pyqtSignal(object)
 
     def __init__(self, application_profiles: list[str] | None = None):
@@ -71,6 +75,8 @@ class OverlayWindow(QWidget):
         self.signals.question_started.connect(self._on_question_started)
         self.signals.text_appended.connect(self._on_text_appended)
         self.signals.answer_cancelled.connect(self._on_answer_cancelled)
+        self.signals.transcript_detected.connect(self._on_transcript_detected)
+        self.signals.transcript_cleared.connect(self._on_transcript_cleared)
         self.signals.error_shown.connect(self._on_error_shown)
         self.signals.status_changed.connect(self._on_status_changed)
 
@@ -177,6 +183,66 @@ class OverlayWindow(QWidget):
         header_layout.addWidget(self.cancel_button)
         header_layout.addWidget(self.close_button)
 
+        self.transcript_label = QLabel("Detected question")
+        self.transcript_label.setStyleSheet(
+            "color: rgba(255, 255, 255, 175); font-size: 11px;"
+        )
+
+        self.transcript_input = QLineEdit()
+        self.transcript_input.setPlaceholderText("No clear speech detected — type the question…")
+        self.transcript_input.setStyleSheet(
+            "QLineEdit { background-color: rgba(255, 255, 255, 28); color: white;"
+            "border: 1px solid rgba(127, 178, 255, 110); border-radius: 5px;"
+            "padding: 5px; font-size: 12px; }"
+            "QLineEdit:focus { border-color: #7fb2ff; }"
+        )
+        self.transcript_input.returnPressed.connect(self._submit_transcript_correction)
+
+        self.regenerate_button = QPushButton("Regenerate")
+        self.regenerate_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.regenerate_button.setToolTip(
+            "Cancel the active answer and generate again from the edited question."
+        )
+        self.regenerate_button.setStyleSheet(
+            "QPushButton { background-color: #376ea8; color: white; border: none;"
+            "border-radius: 5px; padding: 5px 8px; font-size: 11px; }"
+            "QPushButton:hover { background-color: #4784c2; }"
+        )
+        self.regenerate_button.clicked.connect(self._submit_transcript_correction)
+
+        self.retry_transcription_button = QPushButton("Retry STT")
+        self.retry_transcription_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.retry_transcription_button.setToolTip(
+            "Run speech transcription again on the most recent captured question."
+        )
+        self.retry_transcription_button.setStyleSheet(
+            "QPushButton { background-color: rgba(255, 255, 255, 35); color: white;"
+            "border: 1px solid rgba(255, 255, 255, 45); border-radius: 5px;"
+            "padding: 5px 8px; font-size: 11px; }"
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 65); }"
+        )
+        self.retry_transcription_button.clicked.connect(
+            self.retry_transcription_requested.emit
+        )
+
+        self.transcript_panel = QWidget()
+        self.transcript_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.transcript_panel.setStyleSheet(
+            "background-color: rgba(28, 38, 52, 225);"
+        )
+        transcript_layout = QVBoxLayout(self.transcript_panel)
+        transcript_layout.setContentsMargins(8, 6, 8, 7)
+        transcript_layout.setSpacing(4)
+        transcript_layout.addWidget(self.transcript_label)
+        transcript_controls = QHBoxLayout()
+        transcript_controls.setContentsMargins(0, 0, 0, 0)
+        transcript_controls.setSpacing(5)
+        transcript_controls.addWidget(self.transcript_input)
+        transcript_controls.addWidget(self.regenerate_button)
+        transcript_controls.addWidget(self.retry_transcription_button)
+        transcript_layout.addLayout(transcript_controls)
+        self.transcript_panel.setVisible(False)
+
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.label)
         self.scroll.setWidgetResizable(True)
@@ -221,6 +287,7 @@ class OverlayWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.header)
+        layout.addWidget(self.transcript_panel)
         layout.addWidget(self.scroll)
         layout.addWidget(self.input_panel)
         self.setLayout(layout)
@@ -307,6 +374,29 @@ class OverlayWindow(QWidget):
         if follow:
             self._scroll_to_bottom()
 
+    def _on_transcript_detected(
+        self,
+        question: str,
+        confidence: float,
+        no_speech_probability: float,
+        is_reliable: bool,
+    ):
+        self.transcript_input.setText(question)
+        confidence_percent = round(confidence * 100)
+        no_speech_percent = round(no_speech_probability * 100)
+        quality = "Ready" if is_reliable else "Review before generating"
+        color = "#8bd49c" if is_reliable else self._ERROR_COLOR
+        self.transcript_label.setText(
+            f'<span style="color:{color};">{quality}</span> • '
+            f"confidence {confidence_percent}% • no-speech {no_speech_percent}%"
+        )
+        self.regenerate_button.setEnabled(bool(question.strip()))
+        self.transcript_panel.setVisible(True)
+
+    def _on_transcript_cleared(self):
+        self.transcript_input.clear()
+        self.transcript_panel.setVisible(False)
+
     def _on_error_shown(self, message: str):
         follow = self._is_at_bottom()
         escaped = html.escape(message)
@@ -320,7 +410,14 @@ class OverlayWindow(QWidget):
         self.status_label.setText(message)
         self.cancel_button.setEnabled(
             message.startswith(
-                ("Transcribing", "Generating", "Manual question queued", "Cancelling")
+                (
+                    "Transcribing",
+                    "Retrying transcription",
+                    "Generating",
+                    "Manual question queued",
+                    "Corrected question queued",
+                    "Cancelling",
+                )
             )
         )
         # Startup/listening statuses should not erase an active Q&A history.
@@ -333,6 +430,11 @@ class OverlayWindow(QWidget):
             return
         self.question_input.clear()
         self.manual_question_submitted.emit(question)
+
+    def _submit_transcript_correction(self):
+        question = self.transcript_input.text().strip()
+        if question:
+            self.transcript_correction_submitted.emit(question)
 
     def _on_profile_changed(self):
         self.profile_changed.emit(self.selected_profile())
@@ -359,6 +461,23 @@ class OverlayWindow(QWidget):
 
     def show_cancelled(self):
         self.signals.answer_cancelled.emit()
+
+    def show_transcript(
+        self,
+        question: str,
+        confidence: float,
+        no_speech_probability: float,
+        is_reliable: bool,
+    ):
+        self.signals.transcript_detected.emit(
+            question,
+            confidence,
+            no_speech_probability,
+            is_reliable,
+        )
+
+    def clear_transcript(self):
+        self.signals.transcript_cleared.emit()
 
     def show_error(self, message: str):
         self.signals.error_shown.emit(message)

@@ -96,6 +96,12 @@ take priority: they cancel the active answer and replace any captured questions 
 waiting to be processed. The header shows whether the app is listening, transcribing,
 or generating. Use **Cancel** to stop the active operation and discard queued questions.
 
+For spoken questions, an editable **Detected question** panel shows Whisper's text and
+confidence before the answer is generated. If it is wrong, edit it and select **Regenerate**
+to cancel the current answer and regenerate from the correction. **Retry STT** reruns local
+transcription on the most recent captured question. Low-confidence or high no-speech results
+remain available for review, but are not sent to the language model automatically.
+
 To stop: click the **×** in the overlay's corner, or press `Ctrl+C` in the
 terminal.
 
