@@ -38,12 +38,47 @@ def test_status_updates_before_history_but_does_not_erase_answers():
 
     overlay._on_status_changed("Loading speech model…")
     assert overlay.label.text() == "Loading speech model…"
+    assert overlay.status_label.text() == "Loading speech model…"
 
     overlay._on_question_started("Tell me about yourself")
     history = overlay.label.text()
     overlay._on_status_changed("Listening…")
 
     assert overlay.label.text() == history
+    assert overlay.status_label.text() == "Listening…"
+
+
+def test_busy_status_controls_cancel_button():
+    overlay = OverlayWindow()
+
+    overlay._on_status_changed("Transcribing…")
+    assert overlay.cancel_button.isEnabled()
+
+    overlay._on_status_changed("Generating…")
+    assert overlay.cancel_button.isEnabled()
+
+    overlay._on_status_changed("Listening • first 100ms • total 1.2s")
+    assert not overlay.cancel_button.isEnabled()
+
+
+def test_cancel_button_emits_request():
+    overlay = OverlayWindow()
+    requested = []
+    overlay.cancel_requested.connect(lambda: requested.append(True))
+    overlay._on_status_changed("Generating…")
+
+    QTest.mouseClick(overlay.cancel_button, Qt.MouseButton.LeftButton)
+
+    assert requested == [True]
+
+
+def test_cancelled_answer_is_marked_in_history():
+    overlay = OverlayWindow()
+    overlay._on_question_started("Explain a hash map")
+
+    overlay._on_answer_cancelled()
+
+    assert "Answer cancelled." in overlay.label.text()
 
 
 def test_manual_question_is_trimmed_submitted_and_cleared():

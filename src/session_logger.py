@@ -11,13 +11,21 @@ class SessionLogger:
         filename = start_time.strftime("%Y%m%d-%H%M%S") + ".jsonl"
         self.path = self.sessions_dir / filename
 
-    def log(self, question: str, answer: str, timestamp: datetime | None = None) -> None:
+    def log(
+        self,
+        question: str,
+        answer: str,
+        timestamp: datetime | None = None,
+        timings: dict | None = None,
+    ) -> None:
         timestamp = timestamp or datetime.now()
         entry = {
             "timestamp": timestamp.isoformat(),
             "question": question,
             "answer": answer,
         }
+        if timings is not None:
+            entry["timings"] = timings
         with self.path.open("a") as f:
             f.write(json.dumps(entry) + "\n")
 

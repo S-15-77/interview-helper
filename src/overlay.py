@@ -53,12 +53,14 @@ class _DragHandle(QWidget):
 class OverlaySignals(QObject):
     question_started = pyqtSignal(str)
     text_appended = pyqtSignal(str)
+    answer_cancelled = pyqtSignal()
     error_shown = pyqtSignal(str)
     status_changed = pyqtSignal(str)
 
 
 class OverlayWindow(QWidget):
     quit_requested = pyqtSignal()
+    cancel_requested = pyqtSignal()
     manual_question_submitted = pyqtSignal(str)
     profile_changed = pyqtSignal(object)
 
@@ -68,6 +70,7 @@ class OverlayWindow(QWidget):
         self.signals = OverlaySignals()
         self.signals.question_started.connect(self._on_question_started)
         self.signals.text_appended.connect(self._on_text_appended)
+        self.signals.answer_cancelled.connect(self._on_answer_cancelled)
         self.signals.error_shown.connect(self._on_error_shown)
         self.signals.status_changed.connect(self._on_status_changed)
 
@@ -136,6 +139,26 @@ class OverlayWindow(QWidget):
         )
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
 
+        self.status_label = QLabel("Starting…")
+        self.status_label.setStyleSheet(
+            "color: rgba(255, 255, 255, 165); font-size: 11px;"
+        )
+
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cancel_button.setToolTip(
+            "Cancel the active operation and discard questions waiting in the queue."
+        )
+        self.cancel_button.setStyleSheet(
+            "QPushButton { background-color: rgba(255, 128, 128, 55); color: white;"
+            "border: none; border-radius: 5px; padding: 3px 7px; font-size: 11px; }"
+            "QPushButton:hover { background-color: rgba(255, 128, 128, 100); }"
+            "QPushButton:disabled { color: rgba(255, 255, 255, 80);"
+            "background-color: rgba(255, 255, 255, 20); }"
+        )
+        self.cancel_button.clicked.connect(self.cancel_requested.emit)
+
         # The close button used to float directly on the translucent window
         # background with nothing behind it — effectively invisible over an
         # unpredictable desktop. Give it its own opaque header bar instead.
@@ -150,6 +173,8 @@ class OverlayWindow(QWidget):
         header_layout.addWidget(self.profile_label)
         header_layout.addWidget(self.profile_combo)
         header_layout.addStretch()
+        header_layout.addWidget(self.status_label)
+        header_layout.addWidget(self.cancel_button)
         header_layout.addWidget(self.close_button)
 
         self.scroll = QScrollArea()
@@ -273,6 +298,15 @@ class OverlayWindow(QWidget):
         if follow:
             self._scroll_to_bottom()
 
+    def _on_answer_cancelled(self):
+        follow = self._is_at_bottom()
+        self.label.setText(
+            self.label.text()
+            + '<br><span style="color:rgba(255,255,255,140);"><i>Answer cancelled.</i></span>'
+        )
+        if follow:
+            self._scroll_to_bottom()
+
     def _on_error_shown(self, message: str):
         follow = self._is_at_bottom()
         escaped = html.escape(message)
@@ -283,6 +317,12 @@ class OverlayWindow(QWidget):
             self._scroll_to_bottom()
 
     def _on_status_changed(self, message: str):
+        self.status_label.setText(message)
+        self.cancel_button.setEnabled(
+            message.startswith(
+                ("Transcribing", "Generating", "Manual question queued", "Cancelling")
+            )
+        )
         # Startup/listening statuses should not erase an active Q&A history.
         if not self._history_started:
             self.label.setText(html.escape(message))
@@ -316,6 +356,9 @@ class OverlayWindow(QWidget):
 
     def append_text(self, chunk: str):
         self.signals.text_appended.emit(chunk)
+
+    def show_cancelled(self):
+        self.signals.answer_cancelled.emit()
 
     def show_error(self, message: str):
         self.signals.error_shown.emit(message)

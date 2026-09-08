@@ -33,6 +33,22 @@ def test_log_appends_multiple_entries_in_order():
         assert [e["question"] for e in entries] == ["Q1", "Q2"]
 
 
+def test_log_preserves_pipeline_timings():
+    with tempfile.TemporaryDirectory() as tmp:
+        logger = SessionLogger(Path(tmp))
+        timings = {
+            "source": "audio",
+            "transcription_ms": 420,
+            "first_token_ms": 180,
+            "generation_ms": 1300,
+            "total_ms": 1720,
+        }
+
+        logger.log("Q", "A", timings=timings)
+
+        assert logger.read_all()[0]["timings"] == timings
+
+
 def test_read_all_returns_empty_list_when_no_entries_logged():
     with tempfile.TemporaryDirectory() as tmp:
         logger = SessionLogger(Path(tmp), start_time=datetime(2026, 7, 27, 10, 0, 0))

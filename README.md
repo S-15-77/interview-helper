@@ -91,7 +91,10 @@ logged to `sessions/<timestamp>.jsonl`.
 
 If a question is provided as text rather than spoken, paste or type it into the
 field at the bottom of the overlay and press **Enter** or **Generate**. This sends
-the exact text to the answer pipeline without speech transcription.
+the exact text to the answer pipeline without speech transcription. Typed questions
+take priority: they cancel the active answer and replace any captured questions still
+waiting to be processed. The header shows whether the app is listening, transcribing,
+or generating. Use **Cancel** to stop the active operation and discard queued questions.
 
 To stop: click the **×** in the overlay's corner, or press `Ctrl+C` in the
 terminal.

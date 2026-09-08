@@ -37,14 +37,14 @@ Complete these before adding large new features.
 The worker processes questions sequentially. If local generation is slow, newer questions
 can wait behind old work and produce answers after they are no longer useful.
 
-- [ ] Add a bounded work queue.
-- [ ] Display a visible listening, transcribing, and generating state.
-- [ ] Add a Cancel button for the current generation.
-- [ ] Drop or replace stale queued questions when appropriate.
-- [ ] Detect duplicate transcriptions before generating another answer.
-- [ ] Prevent manual submissions from silently waiting behind old audio questions.
-- [ ] Record transcription time, time to first token, and total generation time.
-- [ ] Add concurrency and cancellation tests around the worker.
+- [x] Add a bounded work queue.
+- [x] Display a visible listening, transcribing, and generating state.
+- [x] Add a Cancel button for the current generation.
+- [x] Drop or replace stale queued questions when appropriate.
+- [x] Detect duplicate transcriptions before generating another answer.
+- [x] Prevent manual submissions from silently waiting behind old audio questions.
+- [x] Record transcription time, time to first token, and total generation time.
+- [x] Add concurrency and cancellation tests around the worker.
 
 ### Improve transcript confidence
 
