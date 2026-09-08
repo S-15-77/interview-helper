@@ -67,12 +67,11 @@ These are relatively small changes with a large usability benefit.
 - [ ] Add a global shortcut to show or hide the overlay.
 - [ ] Add keyboard shortcuts for pause, cancel, and regenerate.
 - [ ] Make the overlay width, height, opacity, and font size adjustable.
-- [ ] Persist window position and display settings between launches.
+
 
 ### Definition of done
 
 - The user can control a session without returning to the terminal.
-- The overlay clearly communicates what the application is doing.
 - A slow or incorrect answer can be cancelled without restarting the app.
 
 ## Priority 2: Settings and setup wizard
