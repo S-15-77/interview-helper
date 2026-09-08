@@ -70,6 +70,33 @@ def test_build_prompt_omits_context_block_when_context_empty():
     assert "Recent conversation:" not in prompt
 
 
+def test_build_prompt_adds_shorter_answer_adjustment():
+    prompt = build_prompt(
+        context="",
+        question="Explain a hash map.",
+        response_style="shorter",
+    )
+
+    assert "substantially shorter" in prompt
+    assert "stay under 90 words" in prompt
+
+
+def test_build_prompt_adds_more_detail_adjustment():
+    prompt = build_prompt(
+        context="",
+        question="Explain a hash map.",
+        response_style="more_detail",
+    )
+
+    assert "make this version more detailed" in prompt
+    assert "within the core 200-word limit" in prompt
+
+
+def test_build_prompt_rejects_unknown_response_style():
+    with pytest.raises(ValueError):
+        build_prompt("", "Question", response_style="unbounded")
+
+
 def test_default_knowledge_base_excludes_readme_and_saved_applications(tmp_path):
     my_data = tmp_path / "my_data"
     application = my_data / "applications" / "compiler-role"
@@ -198,3 +225,17 @@ def test_stream_answer_caps_generated_tokens():
         list(stream_answer("What is a hash map?"))
 
     assert post.call_args.kwargs["json"]["options"]["num_predict"] == 320
+
+
+def test_shorter_answer_uses_smaller_generation_cap():
+    done_line = json.dumps({"response": "", "done": True}).encode()
+    mock_response = MagicMock()
+    mock_response.__enter__.return_value = mock_response
+    mock_response.iter_lines.return_value = [done_line]
+
+    with patch("src.llm_client.requests.post", return_value=mock_response) as post:
+        list(stream_answer("What is a hash map?", response_style="shorter"))
+
+    payload = post.call_args.kwargs["json"]
+    assert payload["options"]["num_predict"] == 180
+    assert "stay under 90 words" in payload["prompt"]

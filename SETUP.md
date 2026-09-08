@@ -149,6 +149,13 @@ overlay and press **Enter** or **Generate**. The exact text bypasses speech tran
 Each session's questions and answers are saved to a `sessions/` folder as a
 timestamped log.
 
+Use the overlay control bar to pause/resume audio, regenerate the last answer, request a
+shorter or more detailed version, clear visible history, copy answers, or adjust the view.
+The shortcuts are **Ctrl+Option+P** (pause/resume), **Esc** (cancel), and
+**Ctrl+Option+R** (regenerate) while the app is active. **Ctrl+Option+I** shows/hides the
+overlay system-wide; if macOS does not respond to it, enable your terminal or packaged app
+under **System Settings → Privacy & Security → Accessibility**.
+
 To stop: press `Ctrl+C` in the terminal running the app.
 
 ---

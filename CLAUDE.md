@@ -52,7 +52,10 @@ Two background threads feed a PyQt6 GUI on the main thread; there is no web serv
    the strictest setting) to buffer speech frames and cut an utterance once ~1s of trailing
    silence is seen. Utterances shorter than `MIN_SPEECH_MS` (300ms) are dropped as noise
    rather than returned — Whisper otherwise "confidently" hallucinates text for short
-   noise/comfort-noise blips (e.g. from a muted mic) that VAD mis-flagged as speech.
+   noise/comfort-noise blips (e.g. from a muted mic) that VAD mis-flagged as speech. Pausing
+   keeps draining the live device without processing frames (avoiding stream overflow) and
+   resets `UtteranceSegmenter` at both pause boundaries so half an utterance cannot leak
+   across a pause.
 2. `app.py`'s `Worker` thread pulls utterances from a bounded `WorkQueue`, converts PCM to
    float32 (`pcm_bytes_to_float32`), and calls `transcriber.transcribe`. Cumulative partials
    and queued final utterances use latest-wins replacement instead of building a stale
@@ -73,6 +76,8 @@ Two background threads feed a PyQt6 GUI on the main thread; there is no web serv
    `skills/` files, the candidate's personalization files, recent conversation context, and
    the question — then streams tokens from a local Ollama server (`POST /api/generate`),
    capped with `options.num_predict` so a runaway generation can't add unbounded latency.
+   Its internal `response_style` selects default, shorter (under 90 words with a smaller
+   generation cap), or more-detailed (still under the core 200-word ceiling) instructions.
 5. The `Worker` forwards each streamed chunk to the overlay and appends the Q/A pair to
    `SessionLogger`, which writes one JSON line per turn to `sessions/<start-timestamp>.jsonl`.
    Successful entries include transcription, first-token, generation, and total-pipeline
@@ -115,6 +120,22 @@ editable panel before/during generation. **Regenerate** submits the corrected te
 work; **Retry STT** requeues the retained in-memory audio as priority work and deliberately
 bypasses duplicate-transcript suppression. Starting an unrelated manual question clears the
 transcript panel. Audio is still never written to disk.
+
+**Live controls**: `Worker` retains the last question together with the context that existed
+before its answer. Regenerate/Shorter/More Detail requeue that snapshot as priority work, so
+the replaced answer is not fed back into its own prompt. Pause state is shared with both
+`CaptureThread` and `Worker`; manual questions still work while capture is paused, and worker
+completion statuses correctly return to `Paused` rather than `Listening`. `OverlayWindow`
+maintains a separate plain-text representation of visible history for Copy Answer/Copy
+Session; Clear affects that visible history only, not JSONL logs or worker conversation
+context. A collapsible panel adjusts width, height, opacity, and answer font size.
+
+**Shortcuts**: PyQt application shortcuts handle Ctrl+Option+P (pause), Escape (cancel), and
+Ctrl+Option+R (regenerate). On macOS, `NSEvent` global and local key-down monitors implement
+Ctrl+Option+I system-wide visibility toggling; global key monitoring may require Accessibility
+permission. The monitor emits a Qt signal rather than touching the widget from AppKit's
+callback, and `handle_sigint` unregisters both monitor tokens during shutdown. Non-AppKit
+environments get an application-scoped Ctrl+Option+I fallback.
 
 **Model choice**: the Ollama model is `llm_client.DEFAULT_MODEL`, not read from a config file
 or env var — both `preload()` and `stream_answer()` default to it, so swapping models is a

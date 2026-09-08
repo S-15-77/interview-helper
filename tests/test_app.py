@@ -105,6 +105,7 @@ def test_answer_uses_selected_application_profile():
         "What is IR?",
         "",
         profile_name="compiler-role",
+        response_style="default",
     )
     logger.log.assert_called_once()
     log_args, log_kwargs = logger.log.call_args
@@ -125,6 +126,19 @@ def test_work_queue_is_bounded_and_replaces_stale_audio():
 
     assert work_queue.qsize() == 1
     assert work_queue.get() == AudioWork(b"final-2", True, 4.0)
+
+
+def test_pausing_discards_only_audio_work():
+    work_queue = WorkQueue()
+    work_queue.submit_audio(AudioWork(b"audio", True, 1.0))
+    work_queue.discard_audio()
+
+    assert work_queue.qsize() == 0
+
+    work_queue.submit_manual(ManualQuestion("Keep this"))
+    work_queue.discard_audio()
+
+    assert work_queue.get() == ManualQuestion("Keep this")
 
 
 def test_manual_question_replaces_audio_and_supersedes_active_work():
@@ -333,6 +347,63 @@ def test_retry_without_captured_audio_reports_that_nothing_is_available():
     overlay.show_status.assert_called_once_with("Listening • no transcript to retry")
 
 
+def test_pause_state_discards_audio_and_changes_idle_status():
+    work_queue = WorkQueue()
+    overlay = Mock()
+    worker = Worker(work_queue, overlay, Mock())
+    work_queue.submit_audio(AudioWork(b"queued", True, 1.0))
+
+    worker.set_listening_paused(True)
+
+    assert work_queue.qsize() == 0
+    overlay.show_status.assert_called_with("Paused…")
+
+    worker.set_listening_paused(False)
+
+    overlay.show_status.assert_called_with("Listening…")
+
+
+def test_pausing_does_not_hide_an_active_generation_status():
+    overlay = Mock()
+    worker = Worker(WorkQueue(), overlay, Mock())
+    operation = worker._begin_operation()
+
+    worker.set_listening_paused(True)
+
+    overlay.show_status.assert_not_called()
+    worker._finish_operation(operation)
+
+
+def test_regenerate_reuses_original_context_instead_of_previous_answer():
+    work_queue = WorkQueue()
+    worker = Worker(work_queue, Mock(), Mock())
+    worker.context = "Earlier interview context"
+
+    with patch("src.app.stream_answer", return_value=iter(["First answer"])):
+        worker._answer_question("What is IR?")
+
+    assert "First answer" in worker.context
+
+    worker.regenerate_last_answer("shorter")
+    queued = work_queue.get()
+
+    assert queued == ManualQuestion(
+        "What is IR?",
+        source="shorter",
+        context_override="Earlier interview context",
+        response_style="shorter",
+    )
+
+
+def test_regenerate_without_previous_answer_reports_status():
+    overlay = Mock()
+    worker = Worker(WorkQueue(), overlay, Mock())
+
+    worker.regenerate_last_answer()
+
+    overlay.show_status.assert_called_once_with("Listening • no answer to regenerate")
+
+
 def test_manual_question_cancels_active_answer_and_runs_next():
     work_queue = WorkQueue()
     overlay = Mock()
@@ -422,3 +493,13 @@ def test_stopped_capture_thread_can_be_joined():
     audio_stream.stop_stream.assert_called_once()
     audio_stream.close.assert_called_once()
     pa.terminate.assert_called_once()
+
+
+def test_capture_pause_state_can_be_toggled_before_start():
+    capture = CaptureThread(WorkQueue(), Mock(), 1, Mock())
+
+    capture.set_paused(True)
+    assert capture._pause_event.is_set()
+
+    capture.set_paused(False)
+    assert not capture._pause_event.is_set()

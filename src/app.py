@@ -37,6 +37,8 @@ DUPLICATE_QUESTION_WINDOW_SECONDS = 20.0
 class ManualQuestion:
     text: str
     source: str = "manual"
+    context_override: str | None = None
+    response_style: str = "default"
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,13 @@ class AudioWork:
 @dataclass(frozen=True)
 class RetryTranscription:
     audio: AudioWork
+
+
+@dataclass(frozen=True)
+class LastAnswerRequest:
+    question: str
+    context: str
+    profile_name: str | None
 
 
 WorkItem = AudioWork | ManualQuestion | RetryTranscription
@@ -143,6 +152,12 @@ class WorkQueue:
         with self._condition:
             self._items.clear()
 
+    def discard_audio(self) -> None:
+        with self._condition:
+            self._items = deque(
+                item for item in self._items if isinstance(item, ManualQuestion)
+            )
+
     def stop(self) -> None:
         with self._condition:
             self._stopped = True
@@ -191,6 +206,9 @@ class Worker(threading.Thread):
         self._last_audio_question: tuple[str, float] | None = None
         self._last_audio_lock = threading.Lock()
         self._last_audio_work: AudioWork | None = None
+        self._last_answer_lock = threading.Lock()
+        self._last_answer_request: LastAnswerRequest | None = None
+        self._listening_paused = threading.Event()
         self.work_queue.set_supersede_callback(self._cancel_active_operation)
 
     def _process_partial(self, audio: np.ndarray, generation: int):
@@ -265,7 +283,22 @@ class Worker(threading.Thread):
         self.work_queue.clear()
         cancelled = self._cancel_active_operation()
         self._take_current_filler()
-        self.overlay.show_status("Cancelling…" if cancelled else "Listening…")
+        self.overlay.show_status("Cancelling…" if cancelled else self._idle_status())
+
+    def _idle_status(self, detail: str | None = None) -> str:
+        base = "Paused" if self._listening_paused.is_set() else "Listening"
+        return f"{base} • {detail}" if detail else f"{base}…"
+
+    def set_listening_paused(self, paused: bool) -> None:
+        if paused:
+            self._listening_paused.set()
+            self.work_queue.discard_audio()
+        else:
+            self._listening_paused.clear()
+        with self._operation_lock:
+            operation_active = self._active_cancel_event is not None
+        if not operation_active:
+            self.overlay.show_status(self._idle_status())
 
     def submit_manual_question(self, question: str) -> None:
         question = question.strip()
@@ -280,11 +313,31 @@ class Worker(threading.Thread):
             if self.work_queue.submit_manual(corrected):
                 self.overlay.show_status("Corrected question queued…")
 
+    def regenerate_last_answer(self, response_style: str = "default") -> None:
+        with self._last_answer_lock:
+            previous = self._last_answer_request
+        if previous is None:
+            self.overlay.show_status(self._idle_status("no answer to regenerate"))
+            return
+        request = ManualQuestion(
+            previous.question,
+            source="regenerate" if response_style == "default" else response_style,
+            context_override=previous.context,
+            response_style=response_style,
+        )
+        if self.work_queue.submit_manual(request):
+            label = {
+                "default": "Regenerating answer…",
+                "shorter": "Generating shorter answer…",
+                "more_detail": "Generating detailed answer…",
+            }.get(response_style, "Regenerating answer…")
+            self.overlay.show_status(label)
+
     def retry_last_transcription(self) -> None:
         with self._last_audio_lock:
             audio = self._last_audio_work
         if audio is None:
-            self.overlay.show_status("Listening • no transcript to retry")
+            self.overlay.show_status(self._idle_status("no transcript to retry"))
             return
         if self.work_queue.submit_retry(RetryTranscription(audio)):
             self.overlay.show_status("Retrying transcription…")
@@ -294,6 +347,8 @@ class Worker(threading.Thread):
             self._profile_name = profile_name or None
             # Conversation from one application should never bias another.
             self.context = ""
+        with self._last_answer_lock:
+            self._last_answer_request = None
 
     def _prompt_state(self) -> tuple[str, str | None]:
         with self._profile_lock:
@@ -323,6 +378,8 @@ class Worker(threading.Thread):
         operation_started: float | None = None,
         transcription_seconds: float = 0.0,
         source: str = "manual",
+        context_override: str | None = None,
+        response_style: str = "default",
     ) -> None:
         owns_operation = cancel_event is None
         cancel_event = cancel_event or self._begin_operation()
@@ -338,6 +395,14 @@ class Worker(threading.Thread):
         self.overlay.show_status("Generating…")
 
         context, profile_name = self._prompt_state()
+        if context_override is not None:
+            context = context_override
+        with self._last_answer_lock:
+            self._last_answer_request = LastAnswerRequest(
+                question,
+                context,
+                profile_name,
+            )
         generation_started = time.perf_counter()
         first_token_seconds: float | None = None
         answer_parts = []
@@ -347,6 +412,7 @@ class Worker(threading.Thread):
                 question,
                 context,
                 profile_name=profile_name,
+                response_style=response_style,
             )
             for chunk in answer_stream:
                 if cancel_event.is_set():
@@ -358,7 +424,7 @@ class Worker(threading.Thread):
         except Exception as exc:
             if not cancel_event.is_set():
                 self.overlay.show_error(f"Ollama error: {exc}")
-                self.overlay.show_status("Listening…")
+                self.overlay.show_status(self._idle_status())
             return
         finally:
             close_stream = getattr(answer_stream, "close", None)
@@ -369,7 +435,7 @@ class Worker(threading.Thread):
 
         if cancel_event.is_set():
             self.overlay.show_cancelled()
-            self.overlay.show_status("Listening • answer cancelled")
+            self.overlay.show_status(self._idle_status("answer cancelled"))
             return
 
         answer = "".join(answer_parts)
@@ -399,7 +465,9 @@ class Worker(threading.Thread):
             else "n/a"
         )
         self.overlay.show_status(
-            f"Listening • first {first_token_label} • total {total_seconds:.1f}s"
+            self._idle_status(
+                f"first {first_token_label} • total {total_seconds:.1f}s"
+            )
         )
 
     def run(self):
@@ -417,6 +485,8 @@ class Worker(threading.Thread):
                         item.text,
                         cancel_event=cancel_event,
                         source=item.source,
+                        context_override=item.context_override,
+                        response_style=item.response_style,
                     )
                 except Exception:
                     traceback.print_exc()
@@ -446,7 +516,9 @@ class Worker(threading.Thread):
                 )
                 transcription_seconds = time.perf_counter() - transcription_started
                 if cancel_event.is_set():
-                    self.overlay.show_status("Listening • transcription cancelled")
+                    self.overlay.show_status(
+                        self._idle_status("transcription cancelled")
+                    )
                     continue
                 self.overlay.show_transcript(
                     result.text,
@@ -455,7 +527,9 @@ class Worker(threading.Thread):
                     result.is_reliable,
                 )
                 if not result.text.strip():
-                    self.overlay.show_status("Listening • no clear speech detected")
+                    self.overlay.show_status(
+                        self._idle_status("no clear speech detected")
+                    )
                     continue
                 if not result.is_reliable:
                     self.overlay.show_status("Review transcript • low confidence")
@@ -464,7 +538,7 @@ class Worker(threading.Thread):
                     result.text,
                     audio_work.captured_at,
                 ):
-                    self.overlay.show_status("Listening • duplicate ignored")
+                    self.overlay.show_status(self._idle_status("duplicate ignored"))
                     continue
 
                 self._answer_question(
@@ -477,7 +551,7 @@ class Worker(threading.Thread):
                 )
             except Exception:
                 traceback.print_exc()
-                self.overlay.show_status("Listening…")
+                self.overlay.show_status(self._idle_status())
             finally:
                 self._finish_operation(cancel_event)
 
@@ -498,6 +572,7 @@ class CaptureThread(threading.Thread):
         # threading.Thread already owns a private _stop() method used by join().
         # Shadowing it with an Event makes a completed capture thread unjoinable.
         self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
 
     def run(self):
         pa = self.pa
@@ -505,8 +580,17 @@ class CaptureThread(threading.Thread):
         try:
             stream = open_capture_stream(pa, self.device_index)
             segmenter = UtteranceSegmenter()
+            was_paused = False
             while not self._stop_event.is_set():
                 frame = stream.read(FRAME_SIZE, exception_on_overflow=False)
+                if self._pause_event.is_set():
+                    if not was_paused:
+                        segmenter = UtteranceSegmenter()
+                        was_paused = True
+                    continue
+                if was_paused:
+                    segmenter = UtteranceSegmenter()
+                    was_paused = False
                 utterance = segmenter.push_frame(frame)
                 if utterance is not None:
                     pcm_bytes, is_final = utterance
@@ -523,6 +607,12 @@ class CaptureThread(threading.Thread):
 
     def stop(self):
         self._stop_event.set()
+
+    def set_paused(self, paused: bool) -> None:
+        if paused:
+            self._pause_event.set()
+        else:
+            self._pause_event.clear()
 
 
 def main():
@@ -554,6 +644,15 @@ def main():
     overlay.cancel_requested.connect(worker.cancel_current)
     overlay.profile_changed.connect(worker.set_profile)
     capture = CaptureThread(work_queue, pa, device_index, overlay)
+    overlay.listening_paused_changed.connect(capture.set_paused)
+    overlay.listening_paused_changed.connect(worker.set_listening_paused)
+    overlay.regenerate_requested.connect(worker.regenerate_last_answer)
+    overlay.shorter_answer_requested.connect(
+        lambda: worker.regenerate_last_answer("shorter")
+    )
+    overlay.more_detail_requested.connect(
+        lambda: worker.regenerate_last_answer("more_detail")
+    )
     startup_cancelled = threading.Event()
     shutdown_started = threading.Event()
     lifecycle_lock = threading.Lock()
@@ -610,6 +709,7 @@ def main():
             capture.join(timeout=2)
         if worker.is_alive():
             worker.join(timeout=1)
+        overlay.stop_global_visibility_shortcut()
         app.quit()
 
     signal.signal(signal.SIGINT, handle_sigint)

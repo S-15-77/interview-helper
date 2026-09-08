@@ -102,6 +102,23 @@ to cancel the current answer and regenerate from the correction. **Retry STT** r
 transcription on the most recent captured question. Low-confidence or high no-speech results
 remain available for review, but are not sent to the language model automatically.
 
+The control bar provides the rest of the live session controls:
+
+- **Pause/Resume** stops call-audio processing without interrupting an answer already being
+  generated. Resuming starts with a fresh speech buffer.
+- **Regenerate**, **Shorter**, and **More Detail** replace the latest answer while reusing
+  the context from before that answer, so the old response does not bias its replacement.
+- **Clear** resets only the visible overlay history. Session JSONL logs remain on disk.
+- **Copy Answer** copies the latest answer as plain text; **Copy Session** copies all visible
+  questions and answers.
+- **View** opens sliders for overlay width, height, opacity, and answer font size.
+
+Keyboard shortcuts are **Ctrl+Option+P** for Pause/Resume, **Esc** for Cancel, and
+**Ctrl+Option+R** for Regenerate while the Interview Overlay app is active. On macOS,
+**Ctrl+Option+I** shows or hides the overlay system-wide. macOS may require the terminal or
+packaged app to be enabled under **System Settings → Privacy & Security → Accessibility**
+before a system-wide keyboard monitor can receive key events.
+
 To stop: click the **×** in the overlay's corner, or press `Ctrl+C` in the
 terminal.
 

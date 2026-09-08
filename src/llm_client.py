@@ -8,6 +8,18 @@ OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_MODEL = "qwen2.5:3b-instruct"
 MY_DATA_DIR = Path("my_data")
 APPLICATIONS_DIR = MY_DATA_DIR / "applications"
+RESPONSE_STYLE_INSTRUCTIONS = {
+    "default": "",
+    "shorter": (
+        "Response adjustment: make this version substantially shorter than the prior answer. "
+        "Keep only the essential point and strongest supporting detail; stay under 90 words."
+    ),
+    "more_detail": (
+        "Response adjustment: make this version more detailed while remaining speakable and "
+        "within the core 200-word limit. Add one concrete explanation, trade-off, or supported "
+        "example that improves the answer's substance."
+    ),
+}
 
 SYSTEM_PROMPT = (
     "# 1. Role & System Context\n"
@@ -222,7 +234,14 @@ def load_skills() -> str:
     return _read_markdown_dir(Path("skills"))
 
 
-def build_prompt(context: str, question: str, profile_name: str | None = None) -> str:
+def build_prompt(
+    context: str,
+    question: str,
+    profile_name: str | None = None,
+    response_style: str = "default",
+) -> str:
+    if response_style not in RESPONSE_STYLE_INSTRUCTIONS:
+        raise ValueError(f"Unknown response style: {response_style}")
     context = context.strip()
     kb_data = load_knowledge_base(profile_name)
     skills_data = load_skills()
@@ -234,7 +253,12 @@ def build_prompt(context: str, question: str, profile_name: str | None = None) -
     else:
         kb_block = ""
     context_block = f"Recent conversation:\n{context}\n\n" if context else ""
-    return f"{SYSTEM_PROMPT}\n\n{skills_block}{kb_block}{context_block}Question: {question}\n\nAnswer:"
+    style_instruction = RESPONSE_STYLE_INSTRUCTIONS[response_style]
+    style_block = f"{style_instruction}\n\n" if style_instruction else ""
+    return (
+        f"{SYSTEM_PROMPT}\n\n{skills_block}{kb_block}{context_block}"
+        f"Question: {question}\n\n{style_block}Answer:"
+    )
 
 
 def preload(model: str = DEFAULT_MODEL) -> None:
@@ -277,17 +301,24 @@ def stream_answer(
     context: str = "",
     model: str = DEFAULT_MODEL,
     profile_name: str | None = None,
+    response_style: str = "default",
 ) -> Iterator[str]:
+    num_predict = 180 if response_style == "shorter" else 320
     payload = {
         "model": model,
-        "prompt": build_prompt(context, question, profile_name),
+        "prompt": build_prompt(
+            context,
+            question,
+            profile_name,
+            response_style,
+        ),
         "stream": True,
         # num_predict bounds worst-case generation time — the system prompt already
         # targets ~150-200 words, this just stops a runaway answer from tacking on
         # extra seconds of unbounded generation.
         "options": {
             "temperature": 0.1,
-            "num_predict": 320,
+            "num_predict": num_predict,
         },
     }
     with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=60) as response:

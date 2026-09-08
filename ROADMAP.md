@@ -58,15 +58,15 @@ can wait behind old work and produce answers after they are no longer useful.
 
 These are relatively small changes with a large usability benefit.
 
-- [ ] Pause and resume audio listening.
-- [ ] Cancel the current answer.
-- [ ] Clear the visible session history.
-- [ ] Regenerate the last answer.
-- [ ] Add Shorter and More Detail actions.
-- [ ] Add Copy Answer and Copy Session actions.
-- [ ] Add a global shortcut to show or hide the overlay.
-- [ ] Add keyboard shortcuts for pause, cancel, and regenerate.
-- [ ] Make the overlay width, height, opacity, and font size adjustable.
+- [x] Pause and resume audio listening.
+- [x] Cancel the current answer.
+- [x] Clear the visible session history.
+- [x] Regenerate the last answer.
+- [x] Add Shorter and More Detail actions.
+- [x] Add Copy Answer and Copy Session actions.
+- [x] Add a global shortcut to show or hide the overlay.
+- [x] Add keyboard shortcuts for pause, cancel, and regenerate.
+- [x] Make the overlay width, height, opacity, and font size adjustable.
 
 
 ### Definition of done
