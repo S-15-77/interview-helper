@@ -12,19 +12,21 @@ from typing import Callable
 import numpy as np
 import pyaudio
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from src.audio_capture import (
     FRAME_SIZE,
     SAMPLE_RATE,
     UtteranceSegmenter,
-    find_device_index,
     open_capture_stream,
 )
+from src.llm_client import DEFAULT_MODEL, DEFAULT_OLLAMA_BASE_URL
 from src.llm_client import preload as preload_llm
 from src.llm_client import list_application_profiles, stream_answer
 from src.overlay import OverlayWindow
 from src.session_logger import SessionLogger
+from src.settings import AppSettings, SettingsError, load_settings
+from src.setup_window import SetupWindow
 from src.transcriber import preload as preload_transcriber
 from src.transcriber import transcribe, transcribe_with_metadata
 
@@ -38,7 +40,7 @@ class ManualQuestion:
     text: str
     source: str = "manual"
     context_override: str | None = None
-    response_style: str = "default"
+    response_style: str | None = None
 
 
 @dataclass(frozen=True)
@@ -189,11 +191,22 @@ class Worker(threading.Thread):
         work_queue: WorkQueue,
         overlay: OverlayWindow,
         logger: SessionLogger,
+        *,
+        ollama_model: str = DEFAULT_MODEL,
+        ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL,
+        whisper_model: str = "base.en",
+        whisper_language: str = "en",
+        default_response_style: str = "default",
     ):
         super().__init__(daemon=True)
         self.work_queue = work_queue
         self.overlay = overlay
         self.logger = logger
+        self.ollama_model = ollama_model
+        self.ollama_base_url = ollama_base_url
+        self.whisper_model = whisper_model
+        self.whisper_language = whisper_language
+        self.default_response_style = default_response_style
         self.context = ""
         self.current_filler = ""
         self._partial_thread: threading.Thread | None = None
@@ -213,11 +226,24 @@ class Worker(threading.Thread):
 
     def _process_partial(self, audio: np.ndarray, generation: int):
         try:
-            partial_question = transcribe(audio, SAMPLE_RATE)
+            transcription_options = {}
+            if self.whisper_model != "base.en":
+                transcription_options["model_name"] = self.whisper_model
+            if self.whisper_language != "en":
+                transcription_options["language"] = self.whisper_language
+            partial_question = transcribe(
+                audio,
+                SAMPLE_RATE,
+                **transcription_options,
+            )
             if partial_question.strip():
                 from src.llm_client import generate_filler
 
-                filler = generate_filler(partial_question)
+                filler = generate_filler(
+                    partial_question,
+                    model=self.ollama_model,
+                    base_url=self.ollama_base_url,
+                )
                 with self._partial_lock:
                     # The final utterance may have arrived while transcription or
                     # generation was running. Never let that stale result leak into
@@ -313,24 +339,25 @@ class Worker(threading.Thread):
             if self.work_queue.submit_manual(corrected):
                 self.overlay.show_status("Corrected question queued…")
 
-    def regenerate_last_answer(self, response_style: str = "default") -> None:
+    def regenerate_last_answer(self, response_style: str | None = None) -> None:
         with self._last_answer_lock:
             previous = self._last_answer_request
         if previous is None:
             self.overlay.show_status(self._idle_status("no answer to regenerate"))
             return
+        selected_style = response_style or self.default_response_style
         request = ManualQuestion(
             previous.question,
-            source="regenerate" if response_style == "default" else response_style,
+            source="regenerate" if response_style is None else selected_style,
             context_override=previous.context,
-            response_style=response_style,
+            response_style=selected_style,
         )
         if self.work_queue.submit_manual(request):
             label = {
                 "default": "Regenerating answer…",
                 "shorter": "Generating shorter answer…",
                 "more_detail": "Generating detailed answer…",
-            }.get(response_style, "Regenerating answer…")
+            }.get(selected_style, "Regenerating answer…")
             self.overlay.show_status(label)
 
     def retry_last_transcription(self) -> None:
@@ -379,7 +406,7 @@ class Worker(threading.Thread):
         transcription_seconds: float = 0.0,
         source: str = "manual",
         context_override: str | None = None,
-        response_style: str = "default",
+        response_style: str | None = None,
     ) -> None:
         owns_operation = cancel_event is None
         cancel_event = cancel_event or self._begin_operation()
@@ -389,6 +416,7 @@ class Worker(threading.Thread):
                 self._finish_operation(cancel_event)
             return
 
+        selected_style = response_style or self.default_response_style
         self.overlay.begin_question(question)
         if filler:
             self.overlay.append_text(f"{filler}\n\n")
@@ -408,11 +436,18 @@ class Worker(threading.Thread):
         answer_parts = []
         answer_stream = None
         try:
+            generation_options = {
+                "profile_name": profile_name,
+                "response_style": selected_style,
+            }
+            if self.ollama_model != DEFAULT_MODEL:
+                generation_options["model"] = self.ollama_model
+            if self.ollama_base_url != DEFAULT_OLLAMA_BASE_URL:
+                generation_options["base_url"] = self.ollama_base_url
             answer_stream = stream_answer(
                 question,
                 context,
-                profile_name=profile_name,
-                response_style=response_style,
+                **generation_options,
             )
             for chunk in answer_stream:
                 if cancel_event.is_set():
@@ -510,9 +545,15 @@ class Worker(threading.Thread):
                 )
                 filler = self._take_current_filler()
                 transcription_started = time.perf_counter()
+                transcription_options = {}
+                if self.whisper_model != "base.en":
+                    transcription_options["model_name"] = self.whisper_model
+                if self.whisper_language != "en":
+                    transcription_options["language"] = self.whisper_language
                 result = transcribe_with_metadata(
                     pcm_bytes_to_float32(audio_work.pcm_bytes),
                     SAMPLE_RATE,
+                    **transcription_options,
                 )
                 transcription_seconds = time.perf_counter() - transcription_started
                 if cancel_event.is_set():
@@ -563,12 +604,17 @@ class CaptureThread(threading.Thread):
         pa: pyaudio.PyAudio,
         device_index: int,
         overlay: OverlayWindow,
+        *,
+        vad_aggressiveness: int = 3,
+        silence_timeout_ms: int = 1000,
     ):
         super().__init__(daemon=True)
         self.work_queue = work_queue
         self.pa = pa
         self.device_index = device_index
         self.overlay = overlay
+        self.vad_aggressiveness = vad_aggressiveness
+        self.silence_timeout_ms = silence_timeout_ms
         # threading.Thread already owns a private _stop() method used by join().
         # Shadowing it with an Event makes a completed capture thread unjoinable.
         self._stop_event = threading.Event()
@@ -579,17 +625,17 @@ class CaptureThread(threading.Thread):
         stream = None
         try:
             stream = open_capture_stream(pa, self.device_index)
-            segmenter = UtteranceSegmenter()
+            segmenter = self._new_segmenter()
             was_paused = False
             while not self._stop_event.is_set():
                 frame = stream.read(FRAME_SIZE, exception_on_overflow=False)
                 if self._pause_event.is_set():
                     if not was_paused:
-                        segmenter = UtteranceSegmenter()
+                        segmenter = self._new_segmenter()
                         was_paused = True
                     continue
                 if was_paused:
-                    segmenter = UtteranceSegmenter()
+                    segmenter = self._new_segmenter()
                     was_paused = False
                 utterance = segmenter.push_frame(frame)
                 if utterance is not None:
@@ -598,7 +644,11 @@ class CaptureThread(threading.Thread):
                         AudioWork(pcm_bytes, is_final, time.monotonic())
                     )
         except Exception as exc:
-            self.overlay.show_error(f"Audio capture stopped: {exc}")
+            self.overlay.show_error(
+                f"Audio capture stopped: {exc}. Reopen the app, select this input "
+                "in Setup, and run Test Audio Capture. Also check macOS microphone "
+                "permission."
+            )
         finally:
             if stream is not None:
                 stream.stop_stream()
@@ -614,36 +664,95 @@ class CaptureThread(threading.Thread):
         else:
             self._pause_event.clear()
 
+    def _new_segmenter(self) -> UtteranceSegmenter:
+        return UtteranceSegmenter(
+            vad_aggressiveness=self.vad_aggressiveness,
+            silence_trailing_ms=self.silence_timeout_ms,
+        )
+
 
 def main():
-    pa = pyaudio.PyAudio()
-    try:
-        device_index = find_device_index(pa)
-    except RuntimeError as exc:
-        pa.terminate()
-        print(exc, file=sys.stderr)
-        sys.exit(1)
-
     app = QApplication(sys.argv)
+
+    try:
+        settings = load_settings()
+        settings_error = None
+    except SettingsError as exc:
+        settings = AppSettings()
+        settings_error = str(exc)
+
+    try:
+        pa = pyaudio.PyAudio()
+    except Exception as exc:
+        QMessageBox.critical(
+            None,
+            "Audio initialization failed",
+            "PyAudio could not initialize the system audio service.\n\n"
+            f"Details: {exc}\n\n"
+            "Restart the app and check macOS microphone permission. If the "
+            "problem continues, reinstall the Python audio dependencies.",
+        )
+        return
+
+    profiles = list_application_profiles()
+    setup = SetupWindow(
+        pa,
+        settings,
+        application_profiles=profiles,
+        settings_load_error=settings_error,
+    )
+    if setup.exec() != QDialog.DialogCode.Accepted:
+        pa.terminate()
+        return
+    settings = setup.settings
+    device_index = settings.audio_device_index
+    if device_index is None:
+        pa.terminate()
+        QMessageBox.critical(
+            None,
+            "Audio input missing",
+            "No audio input was selected. Reopen the app and choose an input "
+            "device in Setup.",
+        )
+        return
 
     _signal_timer = QTimer()
     _signal_timer.timeout.connect(lambda: None)
     _signal_timer.start(200)
 
-    overlay = OverlayWindow(list_application_profiles())
+    overlay = OverlayWindow(profiles, settings=settings)
     overlay.show()
 
-    logger = SessionLogger(Path("sessions"))
+    logger = SessionLogger(
+        Path("sessions"),
+        enabled=settings.session_logging_enabled,
+    )
     work_queue = WorkQueue()
 
-    worker = Worker(work_queue, overlay, logger)
+    worker = Worker(
+        work_queue,
+        overlay,
+        logger,
+        ollama_model=settings.ollama_model,
+        ollama_base_url=settings.ollama_base_url,
+        whisper_model=settings.whisper_model,
+        whisper_language=settings.whisper_language,
+        default_response_style=settings.answer_style,
+    )
     worker.set_profile(overlay.selected_profile())
     overlay.manual_question_submitted.connect(worker.submit_manual_question)
     overlay.transcript_correction_submitted.connect(worker.submit_transcript_correction)
     overlay.retry_transcription_requested.connect(worker.retry_last_transcription)
     overlay.cancel_requested.connect(worker.cancel_current)
     overlay.profile_changed.connect(worker.set_profile)
-    capture = CaptureThread(work_queue, pa, device_index, overlay)
+    capture = CaptureThread(
+        work_queue,
+        pa,
+        device_index,
+        overlay,
+        vad_aggressiveness=settings.vad_aggressiveness,
+        silence_timeout_ms=settings.silence_timeout_ms,
+    )
     overlay.listening_paused_changed.connect(capture.set_paused)
     overlay.listening_paused_changed.connect(worker.set_listening_paused)
     overlay.regenerate_requested.connect(worker.regenerate_last_answer)
@@ -660,12 +769,30 @@ def main():
     def initialize_services():
         try:
             overlay.show_status("Loading speech model…")
-            preload_transcriber()
+            try:
+                preload_transcriber(settings.whisper_model)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Whisper model '{settings.whisper_model}' could not load: "
+                    f"{exc}. Check the model name and internet access for its "
+                    "first download, then reopen Setup."
+                ) from exc
             if startup_cancelled.is_set():
                 return
 
             overlay.show_status("Loading language model…")
-            preload_llm()
+            try:
+                preload_llm(
+                    model=settings.ollama_model,
+                    base_url=settings.ollama_base_url,
+                    strict=True,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Ollama model '{settings.ollama_model}' could not start: "
+                    f"{exc}. Make sure Ollama is running and the model is "
+                    "installed, then reopen Setup."
+                ) from exc
             if startup_cancelled.is_set():
                 return
 

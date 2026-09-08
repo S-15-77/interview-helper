@@ -53,3 +53,13 @@ def test_read_all_returns_empty_list_when_no_entries_logged():
     with tempfile.TemporaryDirectory() as tmp:
         logger = SessionLogger(Path(tmp), start_time=datetime(2026, 7, 27, 10, 0, 0))
         assert logger.read_all() == []
+
+
+def test_disabled_logging_does_not_create_a_directory_or_file(tmp_path):
+    sessions = tmp_path / "sessions"
+    logger = SessionLogger(sessions, enabled=False)
+
+    logger.log("Private question", "Private answer")
+
+    assert not sessions.exists()
+    assert logger.read_all() == []

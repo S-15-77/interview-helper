@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 from faster_whisper import WhisperModel
 
-_MODEL: WhisperModel | None = None
+_MODELS: dict[str, WhisperModel] = {}
 MIN_TRANSCRIPTION_CONFIDENCE = 0.25
 MAX_NO_SPEECH_PROBABILITY = 0.65
 
@@ -24,23 +24,34 @@ class TranscriptionResult:
         )
 
 
-def _get_model() -> WhisperModel:
-    global _MODEL
-    if _MODEL is None:
-        _MODEL = WhisperModel("base.en", device="auto", compute_type="int8")
-    return _MODEL
+def _get_model(model_name: str = "base.en") -> WhisperModel:
+    if model_name not in _MODELS:
+        _MODELS[model_name] = WhisperModel(
+            model_name,
+            device="auto",
+            compute_type="int8",
+        )
+    return _MODELS[model_name]
 
 
 def transcribe_with_metadata(
     audio: np.ndarray,
     sample_rate: int = 16000,
+    *,
+    model_name: str = "base.en",
+    language: str = "en",
 ) -> TranscriptionResult:
-    model = _get_model()
+    model = _get_model(model_name)
     # vad_filter runs faster-whisper's built-in Silero VAD over the audio before
     # decoding, dropping silence/noise stretches. Without it, Whisper still "confidently"
     # invents plausible-sounding text for non-speech audio (comfort noise from a muted
     # call, background hiss) instead of returning nothing.
-    segments, _ = model.transcribe(audio, language="en", vad_filter=True)
+    selected_language = None if language.casefold() == "auto" else language
+    segments, _ = model.transcribe(
+        audio,
+        language=selected_language,
+        vad_filter=True,
+    )
     materialized = list(segments)
     text_segments = [
         (segment, segment.text.strip())
@@ -72,9 +83,20 @@ def transcribe_with_metadata(
     return TranscriptionResult(text, confidence, no_speech_probability)
 
 
-def transcribe(audio: np.ndarray, sample_rate: int = 16000) -> str:
-    return transcribe_with_metadata(audio, sample_rate).text
+def transcribe(
+    audio: np.ndarray,
+    sample_rate: int = 16000,
+    *,
+    model_name: str = "base.en",
+    language: str = "en",
+) -> str:
+    return transcribe_with_metadata(
+        audio,
+        sample_rate,
+        model_name=model_name,
+        language=language,
+    ).text
 
 
-def preload() -> None:
-    _get_model()
+def preload(model_name: str = "base.en") -> None:
+    _get_model(model_name)

@@ -5,17 +5,8 @@ etc.), transcribes what they ask, and shows a coached answer in a small
 overlay on your screen. Everything runs locally on your Mac — nothing is
 sent to the cloud.
 
-You don't need to read or write any code to set this up or use it. If you
-ever want to change how it behaves — a different AI model, your own
-background info, a different coaching style — you do that by describing what
-you want to **Claude Code** (Anthropic's AI coding assistant), not by editing
-files yourself. If you don't have it yet:
-```
-npm install -g @anthropic-ai/claude-code
-```
-Then, from inside this project folder, run `claude` and just tell it what
-you want changed in plain English — the sections below tell you which files
-to point it at.
+You don't need to read or write Python code to configure or validate the app. A setup
+window opens on every launch and saves your choices locally.
 
 Follow the steps below in Terminal (Applications → Utilities → Terminal).
 
@@ -52,8 +43,7 @@ Want more reliable answers on hard technical questions instead of speed? Run:
 ```
 ollama pull qwen2.5:7b-instruct
 ```
-then open Claude Code in this folder and say something like *"switch the default Ollama
-model to qwen2.5:7b-instruct"* — it'll make the change for you.
+then select `qwen2.5:7b-instruct` from the app's setup window.
 
 ### e) Set up the Python environment
 ```
@@ -84,8 +74,9 @@ You'll select this device as your output before each session (step 5 below).
 
 ## 3. Personalize your answers (optional, per application)
 
-By default, the tool answers behavioral/HR questions ("Tell me about yourself") with generic
-placeholder scenarios — it doesn't know anything about you until you tell it.
+The tool never presents a generic placeholder story as your real experience. If a
+behavioral question needs details that are absent from your profile, it shows a clearly
+marked STAR framework for you to complete.
 
 Create a separate application profile containing the exact resume and JD used for that role:
 
@@ -137,7 +128,20 @@ python -m src.app
 
 The first time it runs, macOS may ask for microphone permission — allow it.
 
-A small dark overlay box will appear near the top-left of your screen. Join
+The **Interview Overlay Setup** window appears before capture begins:
+
+1. Choose the audio input. BlackHole is recommended for call audio, but any input works.
+2. Select a local Ollama model and the Whisper model/language.
+3. Use **Test Audio Capture** to watch the live input meter.
+4. Use **Test Transcription** and confirm the detected text.
+5. Select **Refresh Diagnostics** to recheck Ollama or installed models.
+6. Review the health summary and select **Save & Start**.
+
+The same window configures answer style, VAD aggressiveness, silence timeout, overlay size
+and opacity, session logging, and the default application profile. Settings are stored in
+the versioned `my_data/settings.json` file, which is ignored by Git.
+
+A small dark overlay box will appear near the top-center of your screen. Join
 your call as normal. When your friend asks something, the app waits for
 ~1 second of silence, transcribes the question, and streams a coached answer
 into the overlay. Drag the header bar to move the window anywhere on screen,
@@ -146,8 +150,8 @@ and click-drag over the answer text to select and copy it.
 For a question supplied as text, paste or type it into the field at the bottom of the
 overlay and press **Enter** or **Generate**. The exact text bypasses speech transcription.
 
-Each session's questions and answers are saved to a `sessions/` folder as a
-timestamped log.
+When session logging is enabled, questions and answers are saved to a `sessions/` folder
+as a timestamped log. Turn logging off in Setup for sessions that should not be retained.
 
 Use the overlay control bar to pause/resume audio, regenerate the last answer, request a
 shorter or more detailed version, clear visible history, copy answers, or adjust the view.
@@ -162,13 +166,13 @@ To stop: press `Ctrl+C` in the terminal running the app.
 
 ## Troubleshooting
 
-- **"Ollama error: ... Connection refused"** in the overlay — Ollama isn't
-  running. Run `ollama serve` in a terminal and leave it open, then try
-  again (no need to restart the app).
+- **Setup reports that Ollama is unreachable** — launch the Ollama app or run
+  `ollama serve`, then select **Refresh Diagnostics**.
+- **Setup reports that a model is missing** — run the exact `ollama pull <model>` command
+  displayed in the status, then refresh the model list.
 - **A `pkg_resources is deprecated` warning on startup** — harmless, ignore it.
-- **"No input device matching 'BlackHole' found"** — BlackHole isn't
-  installed, or you skipped step 1c. Run `brew install blackhole-2ch` and
-  try again.
+- **No input devices appear** — connect or enable the desired input, grant microphone
+  access to your terminal under macOS Privacy & Security, and restart the app.
 - **You can't hear the call yourself** — double check both your speakers
   *and* BlackHole 2ch are checked in the Multi-Output Device (step 2.3), and
   that it's selected as your Mac's output (step 5).

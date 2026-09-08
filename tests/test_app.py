@@ -10,11 +10,13 @@ from src.app import (
     RetryTranscription,
     Worker,
     WorkQueue,
+    main,
     normalize_question,
     pcm_bytes_to_float32,
     trim_context,
 )
 from src.transcriber import TranscriptionResult
+from src.settings import AppSettings
 
 
 def test_pcm_bytes_to_float32_scales_int16_range():
@@ -503,3 +505,82 @@ def test_capture_pause_state_can_be_toggled_before_start():
 
     capture.set_paused(False)
     assert not capture._pause_event.is_set()
+
+
+def test_worker_passes_configured_models_language_endpoint_and_style():
+    worker = Worker(
+        WorkQueue(),
+        Mock(),
+        Mock(),
+        ollama_model="llama3.2:latest",
+        ollama_base_url="http://127.0.0.1:11434",
+        whisper_model="small.en",
+        whisper_language="auto",
+        default_response_style="shorter",
+    )
+
+    with patch("src.app.stream_answer", return_value=iter(["Short answer"])) as stream:
+        worker._answer_question("Explain IR")
+
+    stream.assert_called_once_with(
+        "Explain IR",
+        "",
+        model="llama3.2:latest",
+        profile_name=None,
+        response_style="shorter",
+        base_url="http://127.0.0.1:11434",
+    )
+
+    # The live run loop is covered separately; configuration on final audio is
+    # asserted through the partial path here without starting a long-lived thread.
+    with (
+        patch("src.app.transcribe", return_value="partial") as transcribe_partial,
+        patch("src.llm_client.generate_filler", return_value="Thinking"),
+    ):
+        worker._process_partial(np.zeros(10, dtype=np.float32), 0)
+    transcribe_partial.assert_called_once()
+    args, kwargs = transcribe_partial.call_args
+    assert np.array_equal(args[0], np.zeros(10, dtype=np.float32))
+    assert args[1] == 16000
+    assert kwargs == {"model_name": "small.en", "language": "auto"}
+
+
+def test_capture_uses_configured_vad_and_silence_timeout():
+    capture = CaptureThread(
+        WorkQueue(),
+        Mock(),
+        1,
+        Mock(),
+        vad_aggressiveness=1,
+        silence_timeout_ms=1700,
+    )
+
+    with patch("src.app.UtteranceSegmenter") as segmenter:
+        capture._new_segmenter()
+
+    segmenter.assert_called_once_with(
+        vad_aggressiveness=1,
+        silence_trailing_ms=1700,
+    )
+
+
+def test_startup_opens_setup_before_runtime_and_cancel_exits_cleanly():
+    pa = Mock()
+    application = Mock()
+    setup = Mock()
+    setup.exec.return_value = 0
+
+    with (
+        patch("src.app.QApplication", return_value=application),
+        patch("src.app.pyaudio.PyAudio", return_value=pa),
+        patch("src.app.load_settings", return_value=AppSettings()),
+        patch("src.app.list_application_profiles", return_value=["compiler-role"]),
+        patch("src.app.SetupWindow", return_value=setup) as setup_window,
+        patch("src.app.OverlayWindow") as overlay,
+    ):
+        main()
+
+    setup_window.assert_called_once()
+    assert setup_window.call_args.kwargs["application_profiles"] == ["compiler-role"]
+    pa.terminate.assert_called_once_with()
+    overlay.assert_not_called()

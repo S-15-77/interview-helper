@@ -9,8 +9,29 @@ from PyQt6.QtWidgets import QApplication
 
 import src.overlay as overlay_module
 from src.overlay import OverlayWindow
+from src.settings import AppSettings
 
 _app = QApplication.instance() or QApplication([])
+
+
+def test_saved_overlay_appearance_and_profile_are_applied():
+    overlay = OverlayWindow(
+        ["compiler-role", "ml-role"],
+        settings=AppSettings(
+            overlay_width=610,
+            overlay_height=620,
+            overlay_opacity=78,
+            overlay_font_size=21,
+            default_application_profile="ml-role",
+        ),
+    )
+
+    assert overlay.width() == 610
+    assert overlay.height() == 620
+    # Qt stores native window opacity as an 8-bit value.
+    assert overlay.windowOpacity() == pytest.approx(0.78, abs=0.005)
+    assert overlay._answer_font_size == 21
+    assert overlay.selected_profile() == "ml-role"
 
 
 def test_drag_header_moves_window():
