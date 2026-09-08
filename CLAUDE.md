@@ -61,8 +61,13 @@ Two background threads feed a PyQt6 GUI on the main thread; there is no web serv
    window; deliberately repeated manual questions are not.
 3. `transcriber.py` lazy-loads a singleton `faster_whisper.WhisperModel("base.en")` and
    transcribes with `vad_filter=True` (faster-whisper's own Silero VAD pass) — same
-   hallucination problem as above, second layer of defense. `preload()` is called once at
-   startup so the first real utterance doesn't pay the model-load cost.
+   hallucination problem as above, second layer of defense. `transcribe_with_metadata()`
+   returns text plus a duration-weighted confidence estimate derived from segment average
+   log probability and no-speech probability. Low-confidence/high-no-speech results are
+   displayed for correction or retry but never reach the LLM automatically. The original
+   `transcribe()` string API remains as a wrapper for partial transcription and callers that
+   do not need metadata. `preload()` is called once at startup so the first real utterance
+   doesn't pay the model-load cost.
 4. `llm_client.py`'s `stream_answer` builds a prompt from a large fixed `SYSTEM_PROMPT`
    (behavioral/technical answer rules, STAR method, output-format constraints), any
    `skills/` files, the candidate's personalization files, recent conversation context, and
@@ -105,7 +110,11 @@ calling `.show()`. The header bar (`_DragHandle`) is a real click-drag window mo
 answer label has `TextSelectableByMouse | TextSelectableByKeyboard` so users can select and
 copy the streamed answer. A persistent header status shows loading/listening/transcribing/
 generating state and recent latency, while its Cancel button signals the worker to cancel the
-active operation and clear pending work.
+active operation and clear pending work. Final audio transcriptions appear in a separate
+editable panel before/during generation. **Regenerate** submits the corrected text as priority
+work; **Retry STT** requeues the retained in-memory audio as priority work and deliberately
+bypasses duplicate-transcript suppression. Starting an unrelated manual question clears the
+transcript panel. Audio is still never written to disk.
 
 **Model choice**: the Ollama model is `llm_client.DEFAULT_MODEL`, not read from a config file
 or env var — both `preload()` and `stream_answer()` default to it, so swapping models is a

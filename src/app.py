@@ -26,7 +26,7 @@ from src.llm_client import list_application_profiles, stream_answer
 from src.overlay import OverlayWindow
 from src.session_logger import SessionLogger
 from src.transcriber import preload as preload_transcriber
-from src.transcriber import transcribe
+from src.transcriber import transcribe, transcribe_with_metadata
 
 CONTEXT_WORD_LIMIT = 200
 WORK_QUEUE_MAXSIZE = 3
@@ -36,6 +36,7 @@ DUPLICATE_QUESTION_WINDOW_SECONDS = 20.0
 @dataclass(frozen=True)
 class ManualQuestion:
     text: str
+    source: str = "manual"
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,12 @@ class AudioWork:
     captured_at: float
 
 
-WorkItem = AudioWork | ManualQuestion
+@dataclass(frozen=True)
+class RetryTranscription:
+    audio: AudioWork
+
+
+WorkItem = AudioWork | ManualQuestion | RetryTranscription
 
 
 class WorkQueue:
@@ -63,7 +69,7 @@ class WorkQueue:
     def set_supersede_callback(self, callback: Callable[[], None]) -> None:
         self._supersede_callback = callback
 
-    def submit_manual(self, question: ManualQuestion) -> bool:
+    def _submit_priority(self, item: ManualQuestion | RetryTranscription) -> bool:
         with self._condition:
             if self._stopped:
                 return False
@@ -75,25 +81,36 @@ class WorkQueue:
         with self._condition:
             if self._stopped:
                 return False
-            # A typed question is an explicit user choice. Remove all older queued
-            # work so it cannot sit invisibly behind captured call audio.
+            # An explicit question, correction, or retry removes older queued work
+            # so it cannot sit invisibly behind captured call audio.
             self._items.clear()
-            self._items.append(question)
+            self._items.append(item)
             self._condition.notify()
         return True
+
+    def submit_manual(self, question: ManualQuestion) -> bool:
+        return self._submit_priority(question)
+
+    def submit_retry(self, retry: RetryTranscription) -> bool:
+        return self._submit_priority(retry)
 
     def submit_audio(self, audio: AudioWork) -> bool:
         with self._condition:
             if self._stopped:
                 return False
-            if any(isinstance(item, ManualQuestion) for item in self._items):
+            if any(
+                isinstance(item, (ManualQuestion, RetryTranscription))
+                for item in self._items
+            ):
                 return False
 
             if audio.is_final:
                 # A final utterance makes every older queued partial/final audio
                 # stale. Keep the newest one without ever blocking capture.
                 self._items = deque(
-                    item for item in self._items if isinstance(item, ManualQuestion)
+                    item
+                    for item in self._items
+                    if isinstance(item, (ManualQuestion, RetryTranscription))
                 )
             else:
                 if any(
@@ -172,6 +189,8 @@ class Worker(threading.Thread):
         self._operation_lock = threading.Lock()
         self._active_cancel_event: threading.Event | None = None
         self._last_audio_question: tuple[str, float] | None = None
+        self._last_audio_lock = threading.Lock()
+        self._last_audio_work: AudioWork | None = None
         self.work_queue.set_supersede_callback(self._cancel_active_operation)
 
     def _process_partial(self, audio: np.ndarray, generation: int):
@@ -253,6 +272,22 @@ class Worker(threading.Thread):
         if question:
             if self.work_queue.submit_manual(ManualQuestion(question)):
                 self.overlay.show_status("Manual question queued…")
+
+    def submit_transcript_correction(self, question: str) -> None:
+        question = question.strip()
+        if question:
+            corrected = ManualQuestion(question, source="correction")
+            if self.work_queue.submit_manual(corrected):
+                self.overlay.show_status("Corrected question queued…")
+
+    def retry_last_transcription(self) -> None:
+        with self._last_audio_lock:
+            audio = self._last_audio_work
+        if audio is None:
+            self.overlay.show_status("Listening • no transcript to retry")
+            return
+        if self.work_queue.submit_retry(RetryTranscription(audio)):
+            self.overlay.show_status("Retrying transcription…")
 
     def set_profile(self, profile_name: str | None) -> None:
         with self._profile_lock:
@@ -376,45 +411,69 @@ class Worker(threading.Thread):
                 cancel_event = self._begin_operation()
                 try:
                     self._take_current_filler()
-                    self._answer_question(item.text, cancel_event=cancel_event)
+                    if item.source == "manual":
+                        self.overlay.clear_transcript()
+                    self._answer_question(
+                        item.text,
+                        cancel_event=cancel_event,
+                        source=item.source,
+                    )
                 except Exception:
                     traceback.print_exc()
                 finally:
                     self._finish_operation(cancel_event)
                 continue
 
-            if not item.is_final:
-                self._start_partial(pcm_bytes_to_float32(item.pcm_bytes))
+            is_retry = isinstance(item, RetryTranscription)
+            audio_work = item.audio if is_retry else item
+            if not audio_work.is_final:
+                self._start_partial(pcm_bytes_to_float32(audio_work.pcm_bytes))
                 continue
 
+            with self._last_audio_lock:
+                self._last_audio_work = audio_work
             cancel_event = self._begin_operation()
             operation_started = time.perf_counter()
             try:
-                self.overlay.show_status("Transcribing…")
+                self.overlay.show_status(
+                    "Retrying transcription…" if is_retry else "Transcribing…"
+                )
                 filler = self._take_current_filler()
                 transcription_started = time.perf_counter()
-                question = transcribe(
-                    pcm_bytes_to_float32(item.pcm_bytes),
+                result = transcribe_with_metadata(
+                    pcm_bytes_to_float32(audio_work.pcm_bytes),
                     SAMPLE_RATE,
                 )
                 transcription_seconds = time.perf_counter() - transcription_started
                 if cancel_event.is_set():
                     self.overlay.show_status("Listening • transcription cancelled")
                     continue
-                if not question.strip():
-                    self.overlay.show_status("Listening…")
+                self.overlay.show_transcript(
+                    result.text,
+                    result.confidence,
+                    result.no_speech_probability,
+                    result.is_reliable,
+                )
+                if not result.text.strip():
+                    self.overlay.show_status("Listening • no clear speech detected")
                     continue
-                if self._is_duplicate_audio_question(question, item.captured_at):
+                if not result.is_reliable:
+                    self.overlay.show_status("Review transcript • low confidence")
+                    continue
+                if not is_retry and self._is_duplicate_audio_question(
+                    result.text,
+                    audio_work.captured_at,
+                ):
                     self.overlay.show_status("Listening • duplicate ignored")
                     continue
 
                 self._answer_question(
-                    question,
+                    result.text,
                     filler,
                     cancel_event=cancel_event,
                     operation_started=operation_started,
                     transcription_seconds=transcription_seconds,
-                    source="audio",
+                    source="audio_retry" if is_retry else "audio",
                 )
             except Exception:
                 traceback.print_exc()
@@ -490,6 +549,8 @@ def main():
     worker = Worker(work_queue, overlay, logger)
     worker.set_profile(overlay.selected_profile())
     overlay.manual_question_submitted.connect(worker.submit_manual_question)
+    overlay.transcript_correction_submitted.connect(worker.submit_transcript_correction)
+    overlay.retry_transcription_requested.connect(worker.retry_last_transcription)
     overlay.cancel_requested.connect(worker.cancel_current)
     overlay.profile_changed.connect(worker.set_profile)
     capture = CaptureThread(work_queue, pa, device_index, overlay)
