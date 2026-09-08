@@ -33,6 +33,8 @@ from src.diagnostics import (
 from src.settings import (
     ANSWER_STYLES,
     DEFAULT_SETTINGS_PATH,
+    INTERVIEW_DIFFICULTIES,
+    INTERVIEW_ROUNDS,
     AppSettings,
     SettingsError,
     save_settings,
@@ -207,7 +209,7 @@ class SetupWindow(QDialog):
         self._load_form(self.settings)
         self._connect_change_signals()
         self._refresh_health()
-        if auto_check:
+        if auto_check and self.settings.practice_mode != "review":
             QTimer.singleShot(0, self.refresh_ollama)
 
     def _build_audio_group(self) -> QGroupBox:
@@ -271,9 +273,7 @@ class SetupWindow(QDialog):
         self.ollama_model_combo.setEditable(True)
         self.whisper_model_combo = QComboBox()
         self.whisper_model_combo.setEditable(True)
-        self.whisper_model_combo.addItems(
-            ["tiny.en", "base.en", "small.en", "medium.en"]
-        )
+        self.whisper_model_combo.addItems(["tiny.en", "base.en", "small.en", "medium.en"])
         self.whisper_language_combo = QComboBox()
         self.whisper_language_combo.setEditable(True)
         self.whisper_language_combo.addItems(["en", "auto", "fr", "es", "de"])
@@ -288,8 +288,15 @@ class SetupWindow(QDialog):
         return group
 
     def _build_behavior_group(self, application_profiles: list[str]) -> QGroupBox:
-        group = QGroupBox("Answers and listening")
+        group = QGroupBox("Practice session")
         form = QFormLayout(group)
+        self.practice_mode_combo = QComboBox()
+        for mode, label in (
+            ("learn", "Learn — show a coached answer first"),
+            ("simulate", "Simulate — answer before seeing coaching"),
+            ("review", "Review — browse completed sessions"),
+        ):
+            self.practice_mode_combo.addItem(label, mode)
         self.answer_style_combo = QComboBox()
         for style in ANSWER_STYLES:
             self.answer_style_combo.addItem(self.ANSWER_STYLE_LABELS[style], style)
@@ -306,16 +313,41 @@ class SetupWindow(QDialog):
         self.silence_timeout_spin.setSingleStep(100)
         self.silence_timeout_spin.setSuffix(" ms")
         self.logging_checkbox = QCheckBox("Write Q&A sessions to local JSONL files")
+        self.retention_spin = QSpinBox()
+        self.retention_spin.setRange(0, 3650)
+        self.retention_spin.setSpecialValueText("Keep forever")
+        self.retention_spin.setSuffix(" days")
+        self.redact_exports_checkbox = QCheckBox("Redact contact details in exports by default")
+        self.interview_length_spin = QSpinBox()
+        self.interview_length_spin.setRange(1, 30)
+        self.interview_length_spin.setSuffix(" questions")
+        self.interview_difficulty_combo = QComboBox()
+        for difficulty in INTERVIEW_DIFFICULTIES:
+            self.interview_difficulty_combo.addItem(difficulty.title(), difficulty)
+        self.round_checkboxes = {}
+        rounds_widget = QWidget()
+        rounds_layout = QHBoxLayout(rounds_widget)
+        rounds_layout.setContentsMargins(0, 0, 0, 0)
+        for round_name in INTERVIEW_ROUNDS:
+            checkbox = QCheckBox(round_name.replace("_", " ").title())
+            self.round_checkboxes[round_name] = checkbox
+            rounds_layout.addWidget(checkbox)
         self.profile_combo = QComboBox()
         self.profile_combo.addItem("Default", None)
         for profile in application_profiles:
             self.profile_combo.addItem(profile.replace("-", " "), profile)
 
+        form.addRow("Mode", self.practice_mode_combo)
         form.addRow("Default answer style", self.answer_style_combo)
+        form.addRow("Interview length", self.interview_length_spin)
+        form.addRow("Difficulty", self.interview_difficulty_combo)
+        form.addRow("Rounds", rounds_widget)
         form.addRow("VAD aggressiveness", self.vad_combo)
         form.addRow("Silence timeout", self.silence_timeout_spin)
         form.addRow("Default application profile", self.profile_combo)
         form.addRow("Session logging", self.logging_checkbox)
+        form.addRow("Automatic deletion", self.retention_spin)
+        form.addRow("Private exports", self.redact_exports_checkbox)
         return group
 
     def _build_overlay_group(self) -> QGroupBox:
@@ -383,18 +415,14 @@ class SetupWindow(QDialog):
         current_candidate = self.candidate_device_combo.currentData()
         interviewer_index = self.audio_device_combo.currentData()
         self.candidate_device_combo.clear()
-        candidates = [
-            device for device in self.devices if device.index != interviewer_index
-        ]
+        candidates = [device for device in self.devices if device.index != interviewer_index]
         for device in candidates:
             self.candidate_device_combo.addItem(
                 f"{device.name} ({device.channels} in)",
                 device.index,
             )
         try:
-            default_input_index = int(
-                self.pa.get_default_input_device_info().get("index")
-            )
+            default_input_index = int(self.pa.get_default_input_device_info().get("index"))
         except (AttributeError, OSError, TypeError, ValueError):
             default_input_index = None
         preferred = preferred_candidate_device_index(
@@ -423,21 +451,24 @@ class SetupWindow(QDialog):
         self.answer_style_combo.setCurrentIndex(
             self.answer_style_combo.findData(settings.answer_style)
         )
-        self.vad_combo.setCurrentIndex(
-            self.vad_combo.findData(settings.vad_aggressiveness)
+        self.practice_mode_combo.setCurrentIndex(
+            self.practice_mode_combo.findData(settings.practice_mode)
         )
+        self.interview_length_spin.setValue(settings.interview_length)
+        self.interview_difficulty_combo.setCurrentIndex(
+            self.interview_difficulty_combo.findData(settings.interview_difficulty)
+        )
+        for round_name, checkbox in self.round_checkboxes.items():
+            checkbox.setChecked(round_name in settings.interview_rounds)
+        self.vad_combo.setCurrentIndex(self.vad_combo.findData(settings.vad_aggressiveness))
         self.silence_timeout_spin.setValue(settings.silence_timeout_ms)
         self.logging_checkbox.setChecked(settings.session_logging_enabled)
-        self.candidate_capture_checkbox.setChecked(
-            settings.candidate_capture_enabled
-        )
-        self.retain_candidate_audio_checkbox.setChecked(
-            settings.retain_candidate_audio
-        )
+        self.retention_spin.setValue(settings.session_retention_days)
+        self.redact_exports_checkbox.setChecked(settings.redact_exports)
+        self.candidate_capture_checkbox.setChecked(settings.candidate_capture_enabled)
+        self.retain_candidate_audio_checkbox.setChecked(settings.retain_candidate_audio)
         self.consent_checkbox.setChecked(False)
-        profile_index = self.profile_combo.findData(
-            settings.default_application_profile
-        )
+        profile_index = self.profile_combo.findData(settings.default_application_profile)
         self.profile_combo.setCurrentIndex(max(0, profile_index))
         self.overlay_width_spin.setValue(settings.overlay_width)
         self.overlay_height_spin.setValue(settings.overlay_height)
@@ -447,29 +478,16 @@ class SetupWindow(QDialog):
         self._retention_changed(settings.retain_candidate_audio)
 
     def _connect_change_signals(self) -> None:
-        self.audio_device_combo.currentIndexChanged.connect(
-            self._audio_device_changed
-        )
-        self.candidate_device_combo.currentIndexChanged.connect(
-            self._candidate_device_changed
-        )
-        self.candidate_capture_checkbox.toggled.connect(
-            self._candidate_capture_changed
-        )
-        self.retain_candidate_audio_checkbox.toggled.connect(
-            self._retention_changed
-        )
+        self.practice_mode_combo.currentIndexChanged.connect(self._refresh_health)
+        self.audio_device_combo.currentIndexChanged.connect(self._audio_device_changed)
+        self.candidate_device_combo.currentIndexChanged.connect(self._candidate_device_changed)
+        self.candidate_capture_checkbox.toggled.connect(self._candidate_capture_changed)
+        self.retain_candidate_audio_checkbox.toggled.connect(self._retention_changed)
         self.consent_checkbox.toggled.connect(self._consent_changed)
         self.ollama_url_input.textChanged.connect(self._ollama_selection_changed)
-        self.ollama_model_combo.currentTextChanged.connect(
-            self._ollama_selection_changed
-        )
-        self.whisper_model_combo.currentTextChanged.connect(
-            self._transcription_settings_changed
-        )
-        self.whisper_language_combo.currentTextChanged.connect(
-            self._transcription_settings_changed
-        )
+        self.ollama_model_combo.currentTextChanged.connect(self._ollama_selection_changed)
+        self.whisper_model_combo.currentTextChanged.connect(self._transcription_settings_changed)
+        self.whisper_language_combo.currentTextChanged.connect(self._transcription_settings_changed)
 
     def _audio_device_changed(self) -> None:
         self._audio_test_passed = False
@@ -483,9 +501,7 @@ class SetupWindow(QDialog):
     def _candidate_device_changed(self) -> None:
         self._candidate_audio_test_passed = False
         self.audio_meter.setValue(0)
-        self.audio_status_label.setText(
-            "Candidate microphone changed — run its capture test."
-        )
+        self.audio_status_label.setText("Candidate microphone changed — run its capture test.")
         self._refresh_health()
 
     def _candidate_capture_changed(self, enabled: bool) -> None:
@@ -523,8 +539,7 @@ class SetupWindow(QDialog):
             checked_endpoint = self.ollama_status_label.property("checked_endpoint")
             same_endpoint = (
                 isinstance(checked_endpoint, str)
-                and self.ollama_url_input.text().strip().rstrip("/")
-                == checked_endpoint
+                and self.ollama_url_input.text().strip().rstrip("/") == checked_endpoint
             )
             same_model = (
                 self.ollama_model_combo.currentText().strip()
@@ -532,9 +547,7 @@ class SetupWindow(QDialog):
             )
             if not (same_endpoint and same_model):
                 self.ollama_diagnostics = None
-                self.ollama_status_label.setText(
-                    "Ollama settings changed — refresh diagnostics."
-                )
+                self.ollama_status_label.setText("Ollama settings changed — refresh diagnostics.")
         self._refresh_health()
 
     def _transcription_settings_changed(self) -> None:
@@ -550,11 +563,7 @@ class SetupWindow(QDialog):
         )
         candidate_device_index = self.candidate_device_combo.currentData()
         candidate_device = next(
-            (
-                item
-                for item in self.devices
-                if item.index == candidate_device_index
-            ),
+            (item for item in self.devices if item.index == candidate_device_index),
             None,
         )
         return AppSettings(
@@ -563,25 +572,27 @@ class SetupWindow(QDialog):
             whisper_model=self.whisper_model_combo.currentText(),
             whisper_language=self.whisper_language_combo.currentText(),
             answer_style=self.answer_style_combo.currentData(),
+            practice_mode=self.practice_mode_combo.currentData(),
+            interview_length=self.interview_length_spin.value(),
+            interview_difficulty=self.interview_difficulty_combo.currentData(),
+            interview_rounds=tuple(
+                name for name, checkbox in self.round_checkboxes.items() if checkbox.isChecked()
+            ),
             vad_aggressiveness=self.vad_combo.currentData(),
             silence_timeout_ms=self.silence_timeout_spin.value(),
             audio_device_index=device.index if device else None,
             audio_device_name=device.name if device else None,
             candidate_capture_enabled=self.candidate_capture_checkbox.isChecked(),
-            candidate_audio_device_index=(
-                candidate_device.index if candidate_device else None
-            ),
-            candidate_audio_device_name=(
-                candidate_device.name if candidate_device else None
-            ),
-            retain_candidate_audio=(
-                self.retain_candidate_audio_checkbox.isChecked()
-            ),
+            candidate_audio_device_index=(candidate_device.index if candidate_device else None),
+            candidate_audio_device_name=(candidate_device.name if candidate_device else None),
+            retain_candidate_audio=(self.retain_candidate_audio_checkbox.isChecked()),
             overlay_width=self.overlay_width_spin.value(),
             overlay_height=self.overlay_height_spin.value(),
             overlay_opacity=self.overlay_opacity_spin.value(),
             overlay_font_size=self.overlay_font_size_spin.value(),
             session_logging_enabled=self.logging_checkbox.isChecked(),
+            session_retention_days=self.retention_spin.value(),
+            redact_exports=self.redact_exports_checkbox.isChecked(),
             default_application_profile=self.profile_combo.currentData(),
         ).validated()
 
@@ -640,9 +651,7 @@ class SetupWindow(QDialog):
         )
 
     def test_transcription(self) -> None:
-        self.transcription_output.setPlainText(
-            "Listening for five seconds, then loading Whisper…"
-        )
+        self.transcription_output.setPlainText("Listening for five seconds, then loading Whisper…")
         self._start_audio_diagnostic(
             transcribe_audio=True,
             duration_seconds=5,
@@ -688,9 +697,7 @@ class SetupWindow(QDialog):
         self._diagnostic_source = source
         self._audio_thread.level_changed.connect(self.audio_meter.setValue)
         self._audio_thread.capture_complete.connect(self._audio_capture_complete)
-        self._audio_thread.transcription_complete.connect(
-            self._transcription_complete
-        )
+        self._audio_thread.transcription_complete.connect(self._transcription_complete)
         self._audio_thread.failed.connect(self._audio_failed)
         self._audio_thread.finished.connect(self._audio_check_finished)
         self._audio_thread.start()
@@ -761,16 +768,14 @@ class SetupWindow(QDialog):
         self.candidate_device_combo.setEnabled(enabled and candidate_enabled)
 
     def _refresh_health(self) -> None:
+        review_only = self.practice_mode_combo.currentData() == "review"
         audio_ready = self.audio_device_combo.currentData() is not None
         candidate_enabled = self.candidate_capture_checkbox.isChecked()
         candidate_ready = (
-            not candidate_enabled
-            or self.candidate_device_combo.currentData() is not None
-        )
+            not candidate_enabled and self.practice_mode_combo.currentData() != "simulate"
+        ) or self.candidate_device_combo.currentData() is not None
         consent_ready = self.consent_checkbox.isChecked()
-        ollama_ready = bool(
-            self.ollama_diagnostics and self.ollama_diagnostics.ready
-        )
+        ollama_ready = bool(self.ollama_diagnostics and self.ollama_diagnostics.ready)
         diagnostics_idle = not (
             (self._audio_thread and self._audio_thread.isRunning())
             or (self._ollama_thread and self._ollama_thread.isRunning())
@@ -797,15 +802,15 @@ class SetupWindow(QDialog):
                 "⚠ Existing settings could not be loaded; defaults are shown. "
                 + self._settings_load_error
             )
-        core_ready = audio_ready and candidate_ready and consent_ready and ollama_ready
+        core_ready = review_only or (
+            audio_ready and candidate_ready and consent_ready and ollama_ready
+        )
         if core_ready and diagnostics_idle:
-            lines.append("\nReady to start.")
+            lines.append("\nReady to open review." if review_only else "\nReady to start.")
         elif core_ready:
             lines.append("\nFinishing the current diagnostic…")
         else:
-            lines.append(
-                "\nComplete the audio and Ollama checks above before starting."
-            )
+            lines.append("\nComplete the audio and Ollama checks above before starting.")
         self.health_summary.setText("\n".join(lines))
         self.start_button.setEnabled(core_ready and diagnostics_idle)
         if diagnostics_idle:
@@ -820,13 +825,13 @@ class SetupWindow(QDialog):
             return False
         self._settings_load_error = None
         self.health_summary.setText(
-            f"Settings saved locally to {self.settings_path}.\n\n"
-            + self.health_summary.text()
+            f"Settings saved locally to {self.settings_path}.\n\n" + self.health_summary.text()
         )
         return True
 
     def _save_and_start(self) -> None:
-        if not (
+        review_only = self.practice_mode_combo.currentData() == "review"
+        if not review_only and not (
             self.audio_device_combo.currentData() is not None
             and (
                 not self.candidate_capture_checkbox.isChecked()

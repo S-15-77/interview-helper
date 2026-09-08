@@ -1,3 +1,4 @@
+import logging
 import re
 import signal
 import sys
@@ -5,15 +6,17 @@ import threading
 import time
 import traceback
 from collections import deque
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any
 
 import numpy as np
 import pyaudio
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 
+from src.app_logging import configure_logging
 from src.audio_capture import (
     FRAME_SIZE,
     SAMPLE_RATE,
@@ -25,11 +28,25 @@ from src.candidate_capture import (
     CandidateResponseWorker,
     CandidateWorkQueue,
 )
-from src.llm_client import DEFAULT_MODEL, DEFAULT_OLLAMA_BASE_URL
+from src.context_retrieval import ConversationState, classify_question
+from src.interview_plan import (
+    InterviewQuestion,
+    QuestionBank,
+    generate_follow_up,
+    generate_interview_plan,
+)
+from src.llm_client import (
+    DEFAULT_MODEL,
+    DEFAULT_OLLAMA_BASE_URL,
+    list_application_profiles,
+    stream_answer,
+)
 from src.llm_client import preload as preload_llm
-from src.llm_client import list_application_profiles, stream_answer
 from src.overlay import OverlayWindow
+from src.review_window import ReviewWindow
+from src.runtime_paths import prepare_runtime_directory
 from src.session_logger import SessionLogger
+from src.session_repository import SessionRepository
 from src.settings import AppSettings, SettingsError, load_settings
 from src.setup_window import SetupWindow
 from src.transcriber import preload as preload_transcriber
@@ -46,6 +63,8 @@ class ManualQuestion:
     source: str = "manual"
     context_override: str | None = None
     response_style: str | None = None
+    category: str | None = None
+    difficulty: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,9 +99,9 @@ class WorkQueue:
         self._items: deque[WorkItem] = deque()
         self._condition = threading.Condition()
         self._stopped = False
-        self._supersede_callback: Callable[[], None] | None = None
+        self._supersede_callback: Callable[[], object] | None = None
 
-    def set_supersede_callback(self, callback: Callable[[], None]) -> None:
+    def set_supersede_callback(self, callback: Callable[[], object]) -> None:
         self._supersede_callback = callback
 
     def _submit_priority(self, item: ManualQuestion | RetryTranscription) -> bool:
@@ -114,10 +133,7 @@ class WorkQueue:
         with self._condition:
             if self._stopped:
                 return False
-            if any(
-                isinstance(item, (ManualQuestion, RetryTranscription))
-                for item in self._items
-            ):
+            if any(isinstance(item, (ManualQuestion, RetryTranscription)) for item in self._items):
                 return False
 
             if audio.is_final:
@@ -129,16 +145,11 @@ class WorkQueue:
                     if isinstance(item, (ManualQuestion, RetryTranscription))
                 )
             else:
-                if any(
-                    isinstance(item, AudioWork) and item.is_final
-                    for item in self._items
-                ):
+                if any(isinstance(item, AudioWork) and item.is_final for item in self._items):
                     return False
                 # Partials are cumulative, so only the newest partial is useful.
                 self._items = deque(
-                    item
-                    for item in self._items
-                    if not isinstance(item, AudioWork) or item.is_final
+                    item for item in self._items if not isinstance(item, AudioWork) or item.is_final
                 )
 
             if len(self._items) >= self.maxsize:
@@ -161,9 +172,7 @@ class WorkQueue:
 
     def discard_audio(self) -> None:
         with self._condition:
-            self._items = deque(
-                item for item in self._items if isinstance(item, ManualQuestion)
-            )
+            self._items = deque(item for item in self._items if isinstance(item, ManualQuestion))
 
     def stop(self) -> None:
         with self._condition:
@@ -203,6 +212,7 @@ class Worker(threading.Thread):
         whisper_language: str = "en",
         default_response_style: str = "default",
         candidate_coach=None,
+        practice_mode: str = "learn",
     ):
         super().__init__(daemon=True)
         self.work_queue = work_queue
@@ -214,7 +224,9 @@ class Worker(threading.Thread):
         self.whisper_language = whisper_language
         self.default_response_style = default_response_style
         self.candidate_coach = candidate_coach
+        self.practice_mode = practice_mode
         self.context = ""
+        self.conversation_state = ConversationState()
         self.current_filler = ""
         self._partial_thread: threading.Thread | None = None
         self._partial_generation = 0
@@ -341,6 +353,16 @@ class Worker(threading.Thread):
             if self.work_queue.submit_manual(ManualQuestion(question)):
                 self.overlay.show_status("Manual question queued…")
 
+    def submit_planned_question(self, question: InterviewQuestion) -> None:
+        item = ManualQuestion(
+            question.text,
+            source="mock_interview",
+            category=question.category,
+            difficulty=question.difficulty,
+        )
+        if self.work_queue.submit_manual(item):
+            self.overlay.show_status("Mock interview question queued…")
+
     def submit_transcript_correction(self, question: str) -> None:
         question = question.strip()
         if question:
@@ -378,19 +400,31 @@ class Worker(threading.Thread):
         if self.work_queue.submit_retry(RetryTranscription(audio)):
             self.overlay.show_status("Retrying transcription…")
 
+    def record_candidate_attempt(self, attempt) -> None:
+        story = attempt.question if classify_question(attempt.question) == "behavioral" else None
+        with self._profile_lock:
+            self.conversation_state.add_turn(
+                attempt.question,
+                attempt.transcript,
+                story=story,
+            )
+
     def set_profile(self, profile_name: str | None) -> None:
         with self._profile_lock:
             self._profile_name = profile_name or None
             # Conversation from one application should never bias another.
             self.context = ""
+            self.conversation_state.clear()
         with self._last_answer_lock:
             self._last_answer_request = None
+        self.logger.profile = profile_name or None
         if self.candidate_coach is not None:
             self.candidate_coach.capture.disarm()
 
     def _prompt_state(self) -> tuple[str, str | None]:
         with self._profile_lock:
-            return self.context, self._profile_name
+            structured = self.conversation_state.render()
+            return structured or self.context, self._profile_name
 
     def _is_duplicate_audio_question(self, question: str, captured_at: float) -> bool:
         normalized = normalize_question(question)
@@ -402,10 +436,7 @@ class Worker(threading.Thread):
             return False
         previous_question, previous_captured_at = previous
         age = captured_at - previous_captured_at
-        return (
-            normalized == previous_question
-            and 0 <= age <= DUPLICATE_QUESTION_WINDOW_SECONDS
-        )
+        return normalized == previous_question and 0 <= age <= DUPLICATE_QUESTION_WINDOW_SECONDS
 
     def _answer_question(
         self,
@@ -418,6 +449,8 @@ class Worker(threading.Thread):
         source: str = "manual",
         context_override: str | None = None,
         response_style: str | None = None,
+        category: str | None = None,
+        difficulty: str | None = None,
     ) -> None:
         owns_operation = cancel_event is None
         cancel_event = cancel_event or self._begin_operation()
@@ -430,6 +463,31 @@ class Worker(threading.Thread):
         selected_style = response_style or self.default_response_style
         if self.candidate_coach is not None:
             self.candidate_coach.cancel_listening()
+        if self.practice_mode == "simulate" and source not in {
+            "regenerate",
+            "shorter",
+            "more_detail",
+        }:
+            self.overlay.begin_simulation(question)
+            self.overlay.show_status("Candidate answering…")
+            self.logger.log(
+                question,
+                "",
+                timings={
+                    "source": source,
+                    "transcription_ms": round(transcription_seconds * 1000),
+                    "first_token_ms": None,
+                    "generation_ms": 0,
+                    "total_ms": round((time.perf_counter() - operation_started) * 1000),
+                },
+                category=category,
+                difficulty=difficulty,
+            )
+            if self.candidate_coach is not None:
+                self.candidate_coach.arm_for_question(question, self._profile_name)
+            if owns_operation:
+                self._finish_operation(cancel_event)
+            return
         self.overlay.begin_question(question)
         if filler:
             self.overlay.append_text(f"{filler}\n\n")
@@ -446,10 +504,10 @@ class Worker(threading.Thread):
             )
         generation_started = time.perf_counter()
         first_token_seconds: float | None = None
-        answer_parts = []
-        answer_stream = None
+        answer_parts: list[str] = []
+        answer_stream: Iterator[str] | None = None
         try:
-            generation_options = {
+            generation_options: dict[str, Any] = {
                 "profile_name": profile_name,
                 "response_style": selected_style,
             }
@@ -493,9 +551,7 @@ class Worker(threading.Thread):
             "source": source,
             "transcription_ms": round(transcription_seconds * 1000),
             "first_token_ms": (
-                round(first_token_seconds * 1000)
-                if first_token_seconds is not None
-                else None
+                round(first_token_seconds * 1000) if first_token_seconds is not None else None
             ),
             "generation_ms": round(generation_seconds * 1000),
             "total_ms": round(total_seconds * 1000),
@@ -506,16 +562,20 @@ class Worker(threading.Thread):
                     self.context,
                     f"Q: {question} A: {answer}",
                 )
-        self.logger.log(question, answer, timings=timings)
+                story = question if classify_question(question) == "behavioral" else None
+                self.conversation_state.add_turn(question, answer, story=story)
+        self.logger.log(
+            question,
+            answer,
+            timings=timings,
+            category=category,
+            difficulty=difficulty,
+        )
         first_token_label = (
-            f"{timings['first_token_ms']}ms"
-            if timings["first_token_ms"] is not None
-            else "n/a"
+            f"{timings['first_token_ms']}ms" if timings["first_token_ms"] is not None else "n/a"
         )
         self.overlay.show_status(
-            self._idle_status(
-                f"first {first_token_label} • total {total_seconds:.1f}s"
-            )
+            self._idle_status(f"first {first_token_label} • total {total_seconds:.1f}s")
         )
         if self.candidate_coach is not None:
             self.candidate_coach.arm_for_question(question, profile_name)
@@ -537,6 +597,8 @@ class Worker(threading.Thread):
                         source=item.source,
                         context_override=item.context_override,
                         response_style=item.response_style,
+                        category=item.category,
+                        difficulty=item.difficulty,
                     )
                 except Exception:
                     traceback.print_exc()
@@ -544,8 +606,12 @@ class Worker(threading.Thread):
                     self._finish_operation(cancel_event)
                 continue
 
-            is_retry = isinstance(item, RetryTranscription)
-            audio_work = item.audio if is_retry else item
+            if isinstance(item, RetryTranscription):
+                is_retry = True
+                audio_work = item.audio
+            else:
+                is_retry = False
+                audio_work = item
             if not audio_work.is_final:
                 self._start_partial(pcm_bytes_to_float32(audio_work.pcm_bytes))
                 continue
@@ -555,9 +621,7 @@ class Worker(threading.Thread):
             cancel_event = self._begin_operation()
             operation_started = time.perf_counter()
             try:
-                self.overlay.show_status(
-                    "Retrying transcription…" if is_retry else "Transcribing…"
-                )
+                self.overlay.show_status("Retrying transcription…" if is_retry else "Transcribing…")
                 filler = self._take_current_filler()
                 transcription_started = time.perf_counter()
                 transcription_options = {}
@@ -572,9 +636,7 @@ class Worker(threading.Thread):
                 )
                 transcription_seconds = time.perf_counter() - transcription_started
                 if cancel_event.is_set():
-                    self.overlay.show_status(
-                        self._idle_status("transcription cancelled")
-                    )
+                    self.overlay.show_status(self._idle_status("transcription cancelled"))
                     continue
                 self.overlay.show_transcript(
                     result.text,
@@ -583,9 +645,7 @@ class Worker(threading.Thread):
                     result.is_reliable,
                 )
                 if not result.text.strip():
-                    self.overlay.show_status(
-                        self._idle_status("no clear speech detected")
-                    )
+                    self.overlay.show_status(self._idle_status("no clear speech detected"))
                     continue
                 if not result.is_reliable:
                     self.overlay.show_status("Review transcript • low confidence")
@@ -610,6 +670,96 @@ class Worker(threading.Thread):
                 self.overlay.show_status(self._idle_status())
             finally:
                 self._finish_operation(cancel_event)
+
+
+class InterviewPlanController:
+    """Keeps generation off the Qt thread and presents one unique question at a time."""
+
+    def __init__(self, worker: Worker, overlay: OverlayWindow, settings: AppSettings):
+        self.worker = worker
+        self.overlay = overlay
+        self.settings = settings
+        self.questions: list[InterviewQuestion] = []
+        self.index = -1
+        self.used_questions: set[str] = set()
+        self.question_bank = QuestionBank()
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        self.overlay.show_status("Building mock interview…")
+        threading.Thread(target=self._build, daemon=True).start()
+
+    def _build(self) -> None:
+        profile = self.overlay.selected_profile()
+        profile_root = Path("my_data/applications") / profile if profile else Path("my_data")
+        questions = generate_interview_plan(
+            profile_root,
+            Path("skills"),
+            length=self.settings.interview_length,
+            difficulty=self.settings.interview_difficulty,
+            rounds=self.settings.interview_rounds,
+            model=self.settings.ollama_model,
+            base_url=self.settings.ollama_base_url,
+        )
+        with self._lock:
+            self.questions = questions
+            self.index = -1
+            self.used_questions.clear()
+        for question in questions:
+            self.question_bank.add(question)
+        self.next()
+
+    def next(self) -> None:
+        with self._lock:
+            if self.index + 1 >= len(self.questions):
+                self.overlay.set_mock_progress("Mock Complete", False)
+                self.overlay.show_status("Interview complete • review your session")
+                return
+            self.index += 1
+            question = self.questions[self.index]
+            self.used_questions.add(question.text)
+            current = self.index + 1
+            total = len(self.questions)
+        # Keep Next enabled on the final question so the user can explicitly
+        # finish the timed interview after reviewing/responding to it.
+        self.overlay.set_mock_progress(f"Mock {current}/{total}", True)
+        self.worker.submit_planned_question(question)
+
+    def observe_attempt(self, attempt) -> None:
+        """Prepare a non-duplicate response-aware follow-up for the Next action."""
+        self.worker.record_candidate_attempt(attempt)
+        if not getattr(attempt, "transcript", "").strip():
+            return
+        threading.Thread(target=self._insert_follow_up, args=(attempt,), daemon=True).start()
+
+    def _insert_follow_up(self, attempt) -> None:
+        with self._lock:
+            used = set(self.used_questions)
+            insert_at = self.index + 1
+        follow_up = generate_follow_up(
+            attempt.question,
+            attempt.transcript,
+            used_questions=used,
+            model=self.settings.ollama_model,
+            base_url=self.settings.ollama_base_url,
+        )
+        if not follow_up:
+            return
+        with self._lock:
+            if follow_up in self.used_questions or any(
+                item.text == follow_up for item in self.questions
+            ):
+                return
+            self.questions.insert(
+                insert_at,
+                InterviewQuestion(
+                    follow_up,
+                    classify_question(follow_up),
+                    self.settings.interview_difficulty,
+                    "response follow-up",
+                    "follow_up",
+                ),
+            )
 
 
 class CaptureThread(threading.Thread):
@@ -655,9 +805,7 @@ class CaptureThread(threading.Thread):
                 utterance = segmenter.push_frame(frame)
                 if utterance is not None:
                     pcm_bytes, is_final = utterance
-                    self.work_queue.submit_audio(
-                        AudioWork(pcm_bytes, is_final, time.monotonic())
-                    )
+                    self.work_queue.submit_audio(AudioWork(pcm_bytes, is_final, time.monotonic()))
         except Exception as exc:
             self.overlay.show_error(
                 f"Audio capture stopped: {exc}. Reopen the app, select this input "
@@ -688,6 +836,10 @@ class CaptureThread(threading.Thread):
 
 def main():
     app = QApplication(sys.argv)
+    prepare_runtime_directory()
+    configure_logging()
+    app_log = logging.getLogger("interview_helper.app")
+    app_log.info("application_started")
 
     try:
         settings = load_settings()
@@ -695,19 +847,25 @@ def main():
     except SettingsError as exc:
         settings = AppSettings()
         settings_error = str(exc)
+        app_log.warning("settings_load_failed: %s", exc)
 
+    pa: Any
     try:
         pa = pyaudio.PyAudio()
     except Exception as exc:
-        QMessageBox.critical(
-            None,
-            "Audio initialization failed",
-            "PyAudio could not initialize the system audio service.\n\n"
-            f"Details: {exc}\n\n"
-            "Restart the app and check macOS microphone permission. If the "
-            "problem continues, reinstall the Python audio dependencies.",
-        )
-        return
+        app_log.warning("audio_initialization_failed: %s", exc)
+        audio_error = str(exc)
+
+        class UnavailableAudio:
+            def get_device_count(self) -> int:
+                raise RuntimeError(f"PyAudio initialization failed: {audio_error}")
+
+            def terminate(self) -> None:
+                return None
+
+        # Review mode is intentionally usable even when audio is unavailable.
+        # Setup will show the dependency error and keep live modes disabled.
+        pa = UnavailableAudio()
 
     profiles = list_application_profiles()
     setup = SetupWindow(
@@ -720,14 +878,24 @@ def main():
         pa.terminate()
         return
     settings = setup.settings
+    session_repository = SessionRepository(Path("sessions"))
+    session_repository.cleanup(settings.session_retention_days)
+    if settings.practice_mode == "review":
+        pa.terminate()
+        review = ReviewWindow(
+            session_repository,
+            retention_days=settings.session_retention_days,
+            redact_exports=settings.redact_exports,
+        )
+        review.exec()
+        return
     device_index = settings.audio_device_index
     if device_index is None:
         pa.terminate()
         QMessageBox.critical(
             None,
             "Audio input missing",
-            "No audio input was selected. Reopen the app and choose an input "
-            "device in Setup.",
+            "No audio input was selected. Reopen the app and choose an input device in Setup.",
         )
         return
 
@@ -742,6 +910,8 @@ def main():
         Path("sessions"),
         enabled=settings.session_logging_enabled,
         audio_enabled=settings.retain_candidate_audio,
+        profile=overlay.selected_profile(),
+        practice_mode=settings.practice_mode,
     )
     work_queue = WorkQueue()
 
@@ -802,6 +972,7 @@ def main():
         whisper_language=settings.whisper_language,
         default_response_style=settings.answer_style,
         candidate_coach=candidate_worker,
+        practice_mode=settings.practice_mode,
     )
     worker.set_profile(overlay.selected_profile())
     overlay.manual_question_submitted.connect(worker.submit_manual_question)
@@ -820,12 +991,28 @@ def main():
     overlay.listening_paused_changed.connect(capture.set_paused)
     overlay.listening_paused_changed.connect(worker.set_listening_paused)
     overlay.regenerate_requested.connect(worker.regenerate_last_answer)
-    overlay.shorter_answer_requested.connect(
-        lambda: worker.regenerate_last_answer("shorter")
-    )
-    overlay.more_detail_requested.connect(
-        lambda: worker.regenerate_last_answer("more_detail")
-    )
+    overlay.shorter_answer_requested.connect(lambda: worker.regenerate_last_answer("shorter"))
+    overlay.more_detail_requested.connect(lambda: worker.regenerate_last_answer("more_detail"))
+    interview_controller = InterviewPlanController(worker, overlay, settings)
+    overlay.mock_interview_requested.connect(interview_controller.start)
+    overlay.next_question_requested.connect(interview_controller.next)
+    overlay.signals.candidate_attempt_ready.connect(interview_controller.observe_attempt)
+    review_windows: list[ReviewWindow] = []
+
+    def show_review():
+        review = ReviewWindow(
+            session_repository,
+            retention_days=settings.session_retention_days,
+            redact_exports=settings.redact_exports,
+        )
+        review.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        review.destroyed.connect(
+            lambda _object=None: review_windows.remove(review) if review in review_windows else None
+        )
+        review_windows.append(review)
+        review.show()
+
+    overlay.review_requested.connect(show_review)
     startup_cancelled = threading.Event()
     shutdown_started = threading.Event()
     lifecycle_lock = threading.Lock()
@@ -914,7 +1101,7 @@ def main():
             candidate_worker_was_started = bool(
                 candidate_worker is not None and candidate_worker.ident is not None
             )
-            if candidate_worker_was_started:
+            if candidate_worker_was_started and candidate_worker is not None:
                 candidate_worker.stop()
             elif candidate_capture is not None:
                 candidate_capture.stop()

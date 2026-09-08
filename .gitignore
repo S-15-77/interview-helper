@@ -3,6 +3,9 @@ __pycache__/
 .venv/
 venv/
 sessions/
+logs/
+build/
+dist/
 .DS_Store
 my_data/*
 !my_data/README.md

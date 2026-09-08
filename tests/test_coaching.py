@@ -2,9 +2,9 @@ import json
 from unittest.mock import Mock, patch
 
 from src.coaching import (
+    PRACTICE_FRAMEWORK,
     AttemptTracker,
     CoachingFeedback,
-    PRACTICE_FRAMEWORK,
     analyze_candidate_response,
     analyze_speech_metrics,
     build_coaching_prompt,

@@ -8,9 +8,9 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 import src.overlay as overlay_module
+from src.coaching import CandidateAttempt, CoachingFeedback, SpeechMetrics
 from src.overlay import OverlayWindow
 from src.settings import AppSettings
-from src.coaching import CandidateAttempt, CoachingFeedback, SpeechMetrics
 
 _app = QApplication.instance() or QApplication([])
 
@@ -194,8 +194,7 @@ def test_copy_answer_and_session_use_plain_text_clipboard():
 
     QTest.mouseClick(overlay.copy_session_button, Qt.MouseButton.LeftButton)
     assert QApplication.clipboard().text() == (
-        "Q: Question one?\nA: Answer one.\n\n"
-        "Q: Question two?\nA: Answer two."
+        "Q: Question one?\nA: Answer one.\n\nQ: Question two?\nA: Answer two."
     )
 
 

@@ -8,7 +8,6 @@ import requests
 
 from src.diagnostics import normalize_ollama_base_url
 
-
 FILLER_PATTERNS = (
     ("um", re.compile(r"\bum+\b", re.IGNORECASE)),
     ("uh", re.compile(r"\buh+\b", re.IGNORECASE)),
@@ -98,8 +97,7 @@ def analyze_speech_metrics(transcript: str, duration_seconds: float) -> SpeechMe
     )
     normalized = [word.casefold() for word in words]
     trigrams = Counter(
-        " ".join(normalized[index : index + 3])
-        for index in range(max(0, len(normalized) - 2))
+        " ".join(normalized[index : index + 3]) for index in range(max(0, len(normalized) - 2))
     )
     repeated = tuple(
         phrase
@@ -148,9 +146,7 @@ def _keyword_relevance(question: str, transcript: str) -> int:
         for word in re.findall(r"[A-Za-z0-9']+", question)
         if len(word) > 3 and word.casefold() not in ignored
     }
-    response_words = {
-        word.casefold() for word in re.findall(r"[A-Za-z0-9']+", transcript)
-    }
+    response_words = {word.casefold() for word in re.findall(r"[A-Za-z0-9']+", transcript)}
     if not question_words:
         return 3
     overlap = len(question_words & response_words) / len(question_words)
@@ -317,7 +313,7 @@ def fallback_feedback(
         f"{metrics.words_per_minute} words per minute.",
         "Model-based correctness and profile-grounding checks were unavailable: " + error,
     ]
-    scores = {name: None for name in SCORE_NAMES}
+    scores: dict[str, int | None] = {name: None for name in SCORE_NAMES}
     scores["relevance"] = _keyword_relevance(question, transcript)
     scores["clarity_structure"] = max(1, min(5, 2 + int(metrics.word_count >= 25)))
     scores["conciseness"] = 4 if 25 <= metrics.word_count <= 220 else 2
@@ -330,9 +326,7 @@ def fallback_feedback(
         missing_tradeoffs=(),
         improvements=tuple(suggestions[:2]),
         improved_answer=(
-            PRACTICE_FRAMEWORK
-            if behavioral
-            else (transcript.strip() or ANSWER_FRAMEWORK)
+            PRACTICE_FRAMEWORK if behavioral else (transcript.strip() or ANSWER_FRAMEWORK)
         ),
         source="local_fallback",
     )
@@ -427,12 +421,12 @@ class AttemptTracker:
         metrics: SpeechMetrics,
         feedback: CoachingFeedback,
     ) -> AttemptComparison:
-        deltas = {
-            name: feedback.scores[name] - previous.feedback.scores[name]
-            for name in SCORE_NAMES
-            if feedback.scores.get(name) is not None
-            and previous.feedback.scores.get(name) is not None
-        }
+        deltas: dict[str, int] = {}
+        for name in SCORE_NAMES:
+            current_score = feedback.scores.get(name)
+            previous_score = previous.feedback.scores.get(name)
+            if current_score is not None and previous_score is not None:
+                deltas[name] = current_score - previous_score
         filler_delta = metrics.total_fillers - previous.metrics.total_fillers
         pace_delta = metrics.words_per_minute - previous.metrics.words_per_minute
         improvements = sum(delta > 0 for delta in deltas.values())
@@ -443,11 +437,12 @@ class AttemptTracker:
             direction = "Some scores declined"
         else:
             direction = "Overall scores were steady"
-        changed_scores = ", ".join(
-            f"{name.replace('_', ' ')} {delta:+d}"
-            for name, delta in deltas.items()
-            if delta
-        ) or "no score changes"
+        changed_scores = (
+            ", ".join(
+                f"{name.replace('_', ' ')} {delta:+d}" for name, delta in deltas.items() if delta
+            )
+            or "no score changes"
+        )
         summary = (
             f"{direction}; {changed_scores}; filler phrases {filler_delta:+d}, "
             f"pace {pace_delta:+d} wpm versus attempt {previous.attempt_number}."

@@ -109,3 +109,27 @@ def test_same_device_cannot_be_used_for_both_audio_roles():
             audio_device_index=2,
             candidate_audio_device_index=2,
         ).validated()
+
+
+def test_practice_interview_and_privacy_settings_round_trip(tmp_path):
+    path = tmp_path / "settings.json"
+    settings = AppSettings(
+        practice_mode="simulate",
+        interview_length=12,
+        interview_difficulty="advanced",
+        interview_rounds=("behavioral", "system_design"),
+        session_retention_days=90,
+        redact_exports=True,
+    )
+
+    save_settings(settings, path)
+
+    assert load_settings(path) == settings
+
+
+def test_simulate_mode_requires_candidate_capture():
+    with pytest.raises(SettingsError, match="requires candidate-response capture"):
+        AppSettings(
+            practice_mode="simulate",
+            candidate_capture_enabled=False,
+        ).validated()

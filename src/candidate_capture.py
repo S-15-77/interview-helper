@@ -9,7 +9,6 @@ import numpy as np
 from src.audio_capture import FRAME_SIZE, SAMPLE_RATE, UtteranceSegmenter, open_capture_stream
 from src.coaching import (
     AttemptTracker,
-    CoachingFeedback,
     analyze_candidate_response,
     analyze_speech_metrics,
     fallback_feedback,
@@ -87,9 +86,7 @@ class CandidateCaptureThread(threading.Thread):
             self._generation += 1
             self._assignment = (question, profile_name, self._generation)
             self._armed.set()
-        self.overlay.show_candidate_state(
-            "Candidate mic: listening — answer when ready."
-        )
+        self.overlay.show_candidate_state("Candidate mic: listening — answer when ready.")
 
     def disarm(self) -> None:
         with self._assignment_lock:
@@ -117,9 +114,7 @@ class CandidateCaptureThread(threading.Thread):
         speech_started_at: float | None = None
         try:
             stream = open_capture_stream(self.pa, self.device_index)
-            self.overlay.show_candidate_state(
-                "Candidate mic: ready — waiting for a question."
-            )
+            self.overlay.show_candidate_state("Candidate mic: ready — waiting for a question.")
             while not self._stop_event.is_set():
                 frame = stream.read(FRAME_SIZE, exception_on_overflow=False)
                 assignment = self._current_assignment()
@@ -157,8 +152,7 @@ class CandidateCaptureThread(threading.Thread):
                     continue
                 with self._assignment_lock:
                     still_current = (
-                        self._assignment is not None
-                        and self._assignment[2] == generation
+                        self._assignment is not None and self._assignment[2] == generation
                     )
                     if still_current:
                         self._assignment = None
@@ -169,9 +163,7 @@ class CandidateCaptureThread(threading.Thread):
                 elapsed_duration = (
                     max(
                         0.0,
-                        time.monotonic()
-                        - speech_started_at
-                        - self.silence_timeout_ms / 1000,
+                        time.monotonic() - speech_started_at - self.silence_timeout_ms / 1000,
                     )
                     if speech_started_at is not None
                     else 0.0
@@ -186,9 +178,7 @@ class CandidateCaptureThread(threading.Thread):
                         captured_at=time.monotonic(),
                     )
                 )
-                self.overlay.show_candidate_state(
-                    "Candidate response captured • transcribing…"
-                )
+                self.overlay.show_candidate_state("Candidate response captured • transcribing…")
                 segmenter = self._new_segmenter()
                 active_generation = None
                 speaking = False
@@ -259,17 +249,13 @@ class CandidateResponseWorker(threading.Thread):
         if assignment is not None:
             self.capture.arm(*assignment)
         else:
-            self.overlay.show_candidate_state(
-                "Candidate mic: ready — waiting for a question."
-            )
+            self.overlay.show_candidate_state("Candidate mic: ready — waiting for a question.")
 
     def retry_last(self) -> None:
         with self._last_assignment_lock:
             assignment = self._last_assignment
         if assignment is None:
-            self.overlay.show_candidate_state(
-                "Candidate mic: no question is available to retry."
-            )
+            self.overlay.show_candidate_state("Candidate mic: no question is available to retry.")
             return
         if self._paused.is_set():
             self.overlay.show_candidate_state(
@@ -354,13 +340,9 @@ class CandidateResponseWorker(threading.Thread):
                     "The transcript confidence was low; verify the detected response before relying on detailed feedback."
                 )
             if profile_error:
-                extra_facts.append(
-                    "The application profile could not be loaded: " + profile_error
-                )
+                extra_facts.append("The application profile could not be loaded: " + profile_error)
             if audio_error:
-                extra_facts.append(
-                    "Candidate audio could not be retained: " + audio_error
-                )
+                extra_facts.append("Candidate audio could not be retained: " + audio_error)
             if extra_facts:
                 feedback = replace(
                     feedback,

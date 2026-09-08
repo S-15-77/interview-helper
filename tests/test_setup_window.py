@@ -10,7 +10,6 @@ from src.settings import AppSettings, load_settings
 from src.setup_window import AudioDiagnosticThread, SetupWindow
 from src.transcriber import TranscriptionResult
 
-
 _app = QApplication.instance() or QApplication([])
 
 
@@ -55,14 +54,10 @@ def test_setup_form_exposes_and_saves_all_settings(tmp_path):
     setup.ollama_model_combo.setCurrentText("llama3.2:latest")
     setup.whisper_model_combo.setCurrentText("small.en")
     setup.whisper_language_combo.setCurrentText("auto")
-    setup.answer_style_combo.setCurrentIndex(
-        setup.answer_style_combo.findData("shorter")
-    )
+    setup.answer_style_combo.setCurrentIndex(setup.answer_style_combo.findData("shorter"))
     setup.vad_combo.setCurrentIndex(setup.vad_combo.findData(2))
     setup.silence_timeout_spin.setValue(1600)
-    setup.profile_combo.setCurrentIndex(
-        setup.profile_combo.findData("compiler-role")
-    )
+    setup.profile_combo.setCurrentIndex(setup.profile_combo.findData("compiler-role"))
     setup.logging_checkbox.setChecked(False)
     setup.retain_candidate_audio_checkbox.setChecked(True)
     setup.overlay_width_spin.setValue(650)

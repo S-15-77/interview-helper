@@ -54,9 +54,7 @@ def transcribe_with_metadata(
     )
     materialized = list(segments)
     text_segments = [
-        (segment, segment.text.strip())
-        for segment in materialized
-        if segment.text.strip()
+        (segment, segment.text.strip()) for segment in materialized if segment.text.strip()
     ]
     if not text_segments:
         no_speech_probability = max(
@@ -65,20 +63,23 @@ def transcribe_with_metadata(
         )
         return TranscriptionResult("", 0.0, no_speech_probability)
 
-    weights = [
-        max(float(segment.end) - float(segment.start), 0.01)
-        for segment, _ in text_segments
-    ]
+    weights = [max(float(segment.end) - float(segment.start), 0.01) for segment, _ in text_segments]
     total_weight = sum(weights)
-    average_log_probability = sum(
-        float(getattr(segment, "avg_logprob", -1.0)) * weight
-        for (segment, _), weight in zip(text_segments, weights)
-    ) / total_weight
+    average_log_probability = (
+        sum(
+            float(getattr(segment, "avg_logprob", -1.0)) * weight
+            for (segment, _), weight in zip(text_segments, weights, strict=True)
+        )
+        / total_weight
+    )
     confidence = min(max(math.exp(average_log_probability), 0.0), 1.0)
-    no_speech_probability = sum(
-        float(getattr(segment, "no_speech_prob", 0.0)) * weight
-        for (segment, _), weight in zip(text_segments, weights)
-    ) / total_weight
+    no_speech_probability = (
+        sum(
+            float(getattr(segment, "no_speech_prob", 0.0)) * weight
+            for (segment, _), weight in zip(text_segments, weights, strict=True)
+        )
+        / total_weight
+    )
     text = " ".join(text for _, text in text_segments)
     return TranscriptionResult(text, confidence, no_speech_probability)
 

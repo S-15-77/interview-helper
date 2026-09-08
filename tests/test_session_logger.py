@@ -1,8 +1,8 @@
+import tempfile
+import wave
 from datetime import datetime
 from pathlib import Path
-import tempfile
 from types import SimpleNamespace
-import wave
 
 from src.session_logger import SessionLogger
 

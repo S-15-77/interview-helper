@@ -70,6 +70,21 @@ source venv/bin/activate
 python -m src.app
 ```
 
+Choose a practice mode in Setup:
+
+- **Learn** streams the concise coached answer immediately and keeps Shorter, More Detail, and
+  Regenerate available.
+- **Simulate** shows the question and timers while you answer, then reveals grounded feedback and
+  an improved example. Try Again hides the feedback for the next attempt.
+- **Review** opens the local dashboard without starting capture. You can also open it with the
+  overlay's Review button during Learn or Simulate sessions.
+
+**Start Mock** builds a job-specific interview from the selected application profile. Setup
+controls its length, difficulty, and included rounds. **Next** advances the plan; candidate
+responses can produce a response-aware follow-up, and generated questions are saved to the local
+question bank for later tagging and practice. The overlay tracks both attempt time and total mock
+interview time.
+
 Run this from the project root (the `-m` form is required — `python
 src/app.py` fails with `ModuleNotFoundError`).
 
@@ -146,6 +161,22 @@ the newest one is compared with the previous attempt for that question.
 Candidate transcripts, metrics, feedback, and comparisons are added to the session JSONL
 when logging is enabled. Optional retained audio is stored under
 `sessions/audio/<session-id>/`; it is never required for feedback.
+
+The Review dashboard filters sessions by category and difficulty, compares original and improved
+answers, tracks aggregate scores, pace, fillers and recurring weaknesses, and supports notes and
+future-practice markers. It exports Markdown or PDF locally with optional identifier redaction.
+Retention cleanup and confirmed per-session/all-data deletion include any retained audio. See
+[`PRIVACY.md`](PRIVACY.md) for the exact storage map.
+
+Developers can inspect context selection without sending a model request:
+
+```
+python -m src.prompt_inspector "Tell me about a time you led a project" --profile company-role
+```
+
+Run `pytest -m "not hardware and not ollama"`, `ruff check src tests`, and `mypy src` locally.
+`packaging/build_macos.sh` builds the `.app`; setting `APPLE_SIGNING_IDENTITY` also signs it. Apple
+notarization still requires the maintainer's Developer ID credentials.
 
 Keyboard shortcuts are **Ctrl+Option+P** for Pause/Resume, **Esc** for Cancel, and
 **Ctrl+Option+R** for Regenerate while the Interview Overlay app is active. On macOS,

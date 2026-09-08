@@ -4,6 +4,9 @@ import wave
 from datetime import datetime
 from pathlib import Path
 
+from src.context_retrieval import classify_question
+from src.session_repository import SESSION_SCHEMA_VERSION
+
 
 class SessionLogger:
     def __init__(
@@ -13,11 +16,16 @@ class SessionLogger:
         *,
         enabled: bool = True,
         audio_enabled: bool = False,
+        profile: str | None = None,
+        practice_mode: str = "learn",
     ):
         self.enabled = enabled
         self.audio_enabled = audio_enabled
+        self.profile = profile
+        self.practice_mode = practice_mode
         self._lock = threading.Lock()
         self._audio_counter = 0
+        self._question_metadata: dict[str, tuple[str, str | None]] = {}
         self.sessions_dir = Path(sessions_dir)
         start_time = start_time or datetime.now()
         self.session_id = start_time.strftime("%Y%m%d-%H%M%S")
@@ -33,14 +41,26 @@ class SessionLogger:
         answer: str,
         timestamp: datetime | None = None,
         timings: dict | None = None,
+        category: str | None = None,
+        difficulty: str | None = None,
     ) -> None:
         if not self.enabled:
             return
         timestamp = timestamp or datetime.now()
+        question_key = " ".join(question.casefold().split())
+        resolved_category = category or classify_question(question)
+        with self._lock:
+            self._question_metadata[question_key] = (resolved_category, difficulty)
         entry = {
+            "schema_version": SESSION_SCHEMA_VERSION,
+            "type": "generated_answer",
             "timestamp": timestamp.isoformat(),
             "question": question,
             "answer": answer,
+            "profile": self.profile,
+            "practice_mode": self.practice_mode,
+            "category": resolved_category,
+            "difficulty": difficulty,
         }
         if timings is not None:
             entry["timings"] = timings
@@ -52,10 +72,21 @@ class SessionLogger:
         feedback = attempt.feedback
         metrics = attempt.metrics
         comparison = attempt.comparison
+        question_key = " ".join(attempt.question.casefold().split())
+        with self._lock:
+            category, difficulty = self._question_metadata.get(
+                question_key,
+                (classify_question(attempt.question), None),
+            )
         entry = {
+            "schema_version": SESSION_SCHEMA_VERSION,
             "type": "candidate_attempt",
             "timestamp": datetime.now().isoformat(),
             "question": attempt.question,
+            "profile": self.profile,
+            "practice_mode": self.practice_mode,
+            "category": category,
+            "difficulty": difficulty,
             "attempt_number": attempt.attempt_number,
             "candidate_transcript": attempt.transcript,
             "transcription_confidence": attempt.transcription_confidence,

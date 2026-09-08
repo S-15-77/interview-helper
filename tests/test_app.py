@@ -15,8 +15,8 @@ from src.app import (
     pcm_bytes_to_float32,
     trim_context,
 )
-from src.transcriber import TranscriptionResult
 from src.settings import AppSettings
+from src.transcriber import TranscriptionResult
 
 
 def test_pcm_bytes_to_float32_scales_int16_range():
@@ -194,6 +194,21 @@ def test_retry_transcription_replaces_queued_audio_as_priority_work():
 
 def test_question_normalization_ignores_case_spacing_and_punctuation():
     assert normalize_question("  What IS an IR?! ") == "what is an ir"
+
+
+def test_simulate_mode_arms_candidate_without_generating_or_revealing_answer():
+    overlay = Mock()
+    logger = Mock()
+    coach = Mock()
+    worker = Worker(WorkQueue(), overlay, logger, candidate_coach=coach, practice_mode="simulate")
+
+    with patch("src.app.stream_answer") as stream:
+        worker._answer_question("Design a cache")
+
+    overlay.begin_simulation.assert_called_once_with("Design a cache")
+    coach.arm_for_question.assert_called_once_with("Design a cache", None)
+    stream.assert_not_called()
+    logger.log.assert_called_once()
 
 
 def test_duplicate_audio_question_is_detected_only_inside_window():
@@ -437,6 +452,7 @@ def test_manual_question_cancels_active_answer_and_runs_next():
 
     def answers(question, *_args, **_kwargs):
         if question == "Old audio question":
+
             def old_answer():
                 old_stream_started.set()
                 yield "old chunk"
@@ -465,9 +481,7 @@ def test_manual_question_cancels_active_answer_and_runs_next():
         worker.join(timeout=1)
 
     assert not worker.is_alive()
-    assert [call.args[0] for call in logger.log.call_args_list] == [
-        "Typed priority question"
-    ]
+    assert [call.args[0] for call in logger.log.call_args_list] == ["Typed priority question"]
     overlay.show_cancelled.assert_called_once_with()
 
 
