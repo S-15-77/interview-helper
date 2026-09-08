@@ -67,7 +67,7 @@ These are relatively small changes with a large usability benefit.
 - [ ] Add a global shortcut to show or hide the overlay.
 - [ ] Add keyboard shortcuts for pause, cancel, and regenerate.
 - [ ] Make the overlay width, height, opacity, and font size adjustable.
-- [ ] Persist window position and display settings between launches.
+
 
 ### Definition of done
 
