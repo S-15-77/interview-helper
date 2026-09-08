@@ -80,26 +80,26 @@ BlackHole, Ollama, and model setup are the largest barriers for new users.
 
 ### Setup diagnostics
 
-- [ ] Add an audio input-device selector instead of requiring a device named BlackHole.
-- [ ] Show a live audio-level meter.
-- [ ] Add a Test Audio Capture button.
-- [ ] Add a Test Transcription button with the detected text.
-- [ ] Check whether Ollama is reachable.
-- [ ] List locally installed Ollama models.
-- [ ] Clearly report when the selected model is missing.
-- [ ] Add a setup-complete health summary.
+- [x] Add an audio input-device selector instead of requiring a device named BlackHole.
+- [x] Show a live audio-level meter.
+- [x] Add a Test Audio Capture button.
+- [x] Add a Test Transcription button with the detected text.
+- [x] Check whether Ollama is reachable.
+- [x] List locally installed Ollama models.
+- [x] Clearly report when the selected model is missing.
+- [x] Add a setup-complete health summary.
 
 ### Configurable settings
 
-- [ ] Ollama model.
-- [ ] Whisper model and language.
-- [ ] Answer length or response style.
-- [ ] VAD aggressiveness and silence timeout.
-- [ ] Audio input device.
-- [ ] Overlay appearance.
-- [ ] Session logging on or off.
-- [ ] Default application profile.
-- [ ] Save settings locally in a versioned configuration file.
+- [x] Ollama model.
+- [x] Whisper model and language.
+- [x] Answer length or response style.
+- [x] VAD aggressiveness and silence timeout.
+- [x] Audio input device.
+- [x] Overlay appearance.
+- [x] Session logging on or off.
+- [x] Default application profile.
+- [x] Save settings locally in a versioned configuration file.
 
 ### Definition of done
 

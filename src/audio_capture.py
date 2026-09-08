@@ -22,11 +22,17 @@ MIN_SPEECH_FRAMES = MIN_SPEECH_MS // FRAME_MS
 
 
 class UtteranceSegmenter:
-    def __init__(self, vad_aggressiveness: int = 3, partial_ms: int = 3000):
+    def __init__(
+        self,
+        vad_aggressiveness: int = 3,
+        partial_ms: int = 3000,
+        silence_trailing_ms: int = SILENCE_TRAILING_MS,
+    ):
         self._vad = webrtcvad.Vad(vad_aggressiveness)
         self._speech_frames: list[bytes] = []
         self._trailing_silence = 0
         self._partial_frames = partial_ms // FRAME_MS
+        self._silence_trailing_frames = max(1, silence_trailing_ms // FRAME_MS)
         self._last_partial_count = 0
 
     def push_frame(self, frame_bytes: bytes) -> tuple[bytes, bool] | None:
@@ -47,7 +53,7 @@ class UtteranceSegmenter:
             return None
 
         self._trailing_silence += 1
-        if self._trailing_silence < SILENCE_TRAILING_FRAMES:
+        if self._trailing_silence < self._silence_trailing_frames:
             return None
 
         frames, self._speech_frames = self._speech_frames, []

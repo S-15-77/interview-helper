@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import soundfile as sf
@@ -99,3 +100,18 @@ def test_find_device_index_raises_when_no_match():
 
     with pytest.raises(RuntimeError):
         find_device_index(pa)
+
+
+def test_segmenter_uses_configured_silence_timeout():
+    segmenter = UtteranceSegmenter(silence_trailing_ms=90)
+    segmenter._vad = Mock()
+    segmenter._vad.is_speech.side_effect = lambda frame, _rate: frame == b"speech"
+
+    for _ in range(10):
+        assert segmenter.push_frame(b"speech") is None
+    assert segmenter.push_frame(b"silence") is None
+    assert segmenter.push_frame(b"silence") is None
+
+    utterance, is_final = segmenter.push_frame(b"silence")
+    assert utterance == b"speech" * 10
+    assert is_final

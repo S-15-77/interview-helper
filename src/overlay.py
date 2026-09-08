@@ -18,6 +18,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.settings import AppSettings
+
 try:
     import AppKit
     import objc
@@ -91,15 +93,20 @@ class OverlayWindow(QWidget):
     more_detail_requested = pyqtSignal()
     profile_changed = pyqtSignal(object)
 
-    def __init__(self, application_profiles: list[str] | None = None):
+    def __init__(
+        self,
+        application_profiles: list[str] | None = None,
+        settings: AppSettings | None = None,
+    ):
         super().__init__()
+        settings = settings or AppSettings()
         self._history_started = False
         self._plain_history_parts: list[str] = []
         self._current_answer_chunks: list[str] = []
         self._global_key_monitor = None
         self._local_key_monitor = None
         self._visibility_fallback_shortcut: QShortcut | None = None
-        self._answer_font_size = 16
+        self._answer_font_size = settings.overlay_font_size
         self.signals = OverlaySignals()
         self.signals.question_started.connect(self._on_question_started)
         self.signals.text_appended.connect(self._on_text_appended)
@@ -171,6 +178,12 @@ class OverlayWindow(QWidget):
             "QComboBox QAbstractItemView { background-color: #252525; color: white; }"
         )
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
+        if settings.default_application_profile:
+            profile_index = self.profile_combo.findData(
+                settings.default_application_profile
+            )
+            if profile_index >= 0:
+                self.profile_combo.setCurrentIndex(profile_index)
 
         self.status_label = QLabel("Starting…")
         self.status_label.setStyleSheet(
@@ -345,10 +358,14 @@ class OverlayWindow(QWidget):
         controls_layout.addLayout(primary_controls)
         controls_layout.addLayout(secondary_controls)
 
-        self.width_slider = self._view_slider(360, 800, 480)
-        self.height_slider = self._view_slider(300, 900, 500)
-        self.opacity_slider = self._view_slider(35, 100, 100)
-        self.font_size_slider = self._view_slider(12, 28, 16)
+        self.width_slider = self._view_slider(360, 800, settings.overlay_width)
+        self.height_slider = self._view_slider(300, 900, settings.overlay_height)
+        self.opacity_slider = self._view_slider(35, 100, settings.overlay_opacity)
+        self.font_size_slider = self._view_slider(
+            12,
+            28,
+            settings.overlay_font_size,
+        )
         self.width_slider.valueChanged.connect(self.setFixedWidth)
         self.height_slider.valueChanged.connect(self.setFixedHeight)
         self.opacity_slider.valueChanged.connect(
@@ -433,11 +450,12 @@ class OverlayWindow(QWidget):
         layout.addWidget(self.input_panel)
         self.setLayout(layout)
 
-        self.setFixedWidth(480)
+        self.setFixedWidth(settings.overlay_width)
+        self.setWindowOpacity(settings.overlay_opacity / 100)
         screen = QApplication.primaryScreen()
         geometry = screen.availableGeometry() if screen else None
         available_height = geometry.height() if geometry else 900
-        initial_height = min(500, available_height - 120)
+        initial_height = min(settings.overlay_height, max(300, available_height - 120))
         self.setFixedHeight(initial_height)
         self.height_slider.setValue(initial_height)
         # Top-center, near the built-in webcam — easier to glance at than a

@@ -6,7 +6,7 @@ It doubles as the architecture doc for human contributors — read it before ope
 ## What this is
 
 A fully local, macOS-only mock-interview practice tool. It listens to a friend's voice
-during a video call (via a BlackHole virtual audio device), transcribes their question,
+during a video call (normally via a selected BlackHole virtual audio input), transcribes their question,
 and streams a coached spoken-answer script onto a floating always-on-top overlay. Nothing
 leaves the machine — audio, transcription, and the LLM all run locally. Per the README,
 this is explicitly for practicing with a consenting friend, not for use during a real
@@ -36,10 +36,10 @@ python -m pytest tests/test_llm_client.py::test_name  # single test
 QT_QPA_PLATFORM=offscreen python -m pytest tests/test_overlay.py
 ```
 
-External system deps (Homebrew, not in requirements.txt): `ollama`, `portaudio`,
-`blackhole-2ch`. `audio_capture.find_device_index` looks for an input device whose name
-contains "BlackHole" — the app will refuse to start without it configured as a
-Multi-Output Device (see README/SETUP.md for the Audio MIDI Setup steps).
+External system deps (Homebrew, not in requirements.txt): `ollama`, `portaudio`, and,
+for capturing call system audio, `blackhole-2ch`. The setup window lists every input device;
+BlackHole is preferred initially when present but is no longer required to launch the app.
+See README/SETUP.md for the Multi-Output Device steps.
 
 ## Architecture
 
@@ -47,9 +47,9 @@ Two background threads feed a PyQt6 GUI on the main thread; there is no web serv
 
 **Pipeline**, one utterance at a time:
 
-1. `audio_capture.py` — `CaptureThread` reads 30ms PCM frames from the BlackHole input
-   stream and feeds them to `UtteranceSegmenter`, which uses `webrtcvad` (aggressiveness 3,
-   the strictest setting) to buffer speech frames and cut an utterance once ~1s of trailing
+1. `audio_capture.py` — `CaptureThread` reads 30ms PCM frames from the input selected in
+   Setup and feeds them to `UtteranceSegmenter`, which uses configurable `webrtcvad`
+   aggressiveness to buffer speech frames and cut an utterance after the configured trailing
    silence is seen. Utterances shorter than `MIN_SPEECH_MS` (300ms) are dropped as noise
    rather than returned — Whisper otherwise "confidently" hallucinates text for short
    noise/comfort-noise blips (e.g. from a muted mic) that VAD mis-flagged as speech. Pausing
@@ -62,7 +62,7 @@ Two background threads feed a PyQt6 GUI on the main thread; there is no web serv
    backlog. A manual question clears queued audio, cooperatively cancels the active operation,
    and runs next. Repeated audio transcriptions are suppressed within a short capture-time
    window; deliberately repeated manual questions are not.
-3. `transcriber.py` lazy-loads a singleton `faster_whisper.WhisperModel("base.en")` and
+3. `transcriber.py` lazy-loads and caches the selected `faster_whisper.WhisperModel` and
    transcribes with `vad_filter=True` (faster-whisper's own Silero VAD pass) — same
    hallucination problem as above, second layer of defense. `transcribe_with_metadata()`
    returns text plus a duration-weighted confidence estimate derived from segment average
@@ -78,8 +78,9 @@ Two background threads feed a PyQt6 GUI on the main thread; there is no web serv
    capped with `options.num_predict` so a runaway generation can't add unbounded latency.
    Its internal `response_style` selects default, shorter (under 90 words with a smaller
    generation cap), or more-detailed (still under the core 200-word ceiling) instructions.
-5. The `Worker` forwards each streamed chunk to the overlay and appends the Q/A pair to
-   `SessionLogger`, which writes one JSON line per turn to `sessions/<start-timestamp>.jsonl`.
+5. The `Worker` forwards each streamed chunk to the overlay and, when session logging is
+   enabled, appends the Q/A pair to `SessionLogger`, which writes one JSON line per turn to
+   `sessions/<start-timestamp>.jsonl`.
    Successful entries include transcription, first-token, generation, and total-pipeline
    timings in milliseconds. Cancelled answers are visibly marked but are not logged or added
    to conversation context.
@@ -130,6 +131,14 @@ maintains a separate plain-text representation of visible history for Copy Answe
 Session; Clear affects that visible history only, not JSONL logs or worker conversation
 context. A collapsible panel adjusts width, height, opacity, and answer font size.
 
+**Setup and settings**: `SetupWindow` (in `setup_window.py`) runs before the overlay. It uses
+`diagnostics.py` to enumerate input devices, meter/test capture, test Whisper with visible
+text, and query Ollama's `/api/tags` endpoint for installed models. The health summary blocks
+startup until an audio input is selected and the configured Ollama model exists. All user
+choices are validated by `settings.AppSettings` and atomically stored in the versioned,
+gitignored `my_data/settings.json`. `app.main()` then injects those settings into capture,
+transcription, generation, logging, the initial application profile, and overlay appearance.
+
 **Shortcuts**: PyQt application shortcuts handle Ctrl+Option+P (pause), Escape (cancel), and
 Ctrl+Option+R (regenerate). On macOS, `NSEvent` global and local key-down monitors implement
 Ctrl+Option+I system-wide visibility toggling; global key monitoring may require Accessibility
@@ -137,9 +146,9 @@ permission. The monitor emits a Qt signal rather than touching the widget from A
 callback, and `handle_sigint` unregisters both monitor tokens during shutdown. Non-AppKit
 environments get an application-scoped Ctrl+Option+I fallback.
 
-**Model choice**: the Ollama model is `llm_client.DEFAULT_MODEL`, not read from a config file
-or env var — both `preload()` and `stream_answer()` default to it, so swapping models is a
-one-line change. `qwen2.5:3b-instruct` (current default) measured ~2x the tok/s of
+**Model choice**: `llm_client.DEFAULT_MODEL` seeds first-run settings; after that, the user
+selects any locally installed model in Setup and both `preload()` and `stream_answer()` use
+that saved choice. `qwen2.5:3b-instruct` (current default) measured ~2x the tok/s of
 `qwen2.5:7b-instruct` on this project's dev machine, at the cost of looser
 instruction-following (word-count targets, avoiding filler openers) — a real trade-off, not
 a strict upgrade.

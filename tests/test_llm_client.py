@@ -9,6 +9,7 @@ from src.llm_client import (
     list_application_profiles,
     load_knowledge_base,
     load_skills,
+    preload,
     stream_answer,
 )
 
@@ -31,7 +32,8 @@ def test_prompt_describes_the_audio_source_accurately():
     prompt = build_prompt(context="", question="What is a hash map?")
 
     assert "friend's voice is captured from the call's system audio" in prompt
-    assert "BlackHole virtual audio device" in prompt
+    assert "selected input device" in prompt
+    assert "BlackHole for call system audio" in prompt
     assert "never hear the candidate's microphone" in prompt
 
 
@@ -239,3 +241,33 @@ def test_shorter_answer_uses_smaller_generation_cap():
     payload = post.call_args.kwargs["json"]
     assert payload["options"]["num_predict"] == 180
     assert "stay under 90 words" in payload["prompt"]
+
+
+def test_stream_answer_uses_configured_ollama_endpoint_and_model():
+    done_line = json.dumps({"response": "", "done": True}).encode()
+    mock_response = MagicMock()
+    mock_response.__enter__.return_value = mock_response
+    mock_response.iter_lines.return_value = [done_line]
+
+    with patch("src.llm_client.requests.post", return_value=mock_response) as post:
+        list(
+            stream_answer(
+                "What is IR?",
+                model="llama3.2:latest",
+                base_url="http://127.0.0.1:11434/",
+            )
+        )
+
+    assert post.call_args.args[0] == "http://127.0.0.1:11434/api/generate"
+    assert post.call_args.kwargs["json"]["model"] == "llama3.2:latest"
+
+
+def test_strict_preload_surfaces_ollama_startup_failure():
+    from requests import ConnectionError
+
+    with patch(
+        "src.llm_client.requests.post",
+        side_effect=ConnectionError("connection refused"),
+    ):
+        with pytest.raises(ConnectionError, match="connection refused"):
+            preload(strict=True)

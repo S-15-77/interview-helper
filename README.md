@@ -14,9 +14,8 @@ for use during a real employer interview.
    ollama pull qwen2.5:3b-instruct
    ```
    Verify: `ollama list` should show `qwen2.5:3b-instruct`. This is the fast model, tuned
-   for real-time answers. Want more reliable answers on hard technical questions instead of
-   speed? Pull `qwen2.5:7b-instruct` and ask Claude Code to switch the default model for you
-   — see SETUP.md.
+   for real-time answers. For more reliable answers on hard technical questions, pull
+   `qwen2.5:7b-instruct` and select it in the setup window.
 
 2. **Install BlackHole** (virtual audio device that lets the app "hear"
    your friend's voice from the call):
@@ -74,7 +73,21 @@ python -m src.app
 Run this from the project root (the `-m` form is required — `python
 src/app.py` fails with `ModuleNotFoundError`).
 
-An overlay window appears top-center and is pinned on top even when you click
+The **Interview Overlay Setup** window opens first. Choose any available input device
+(BlackHole is recommended for call system audio), select the installed Ollama model,
+and review the remaining settings. **Test Audio Capture** shows a live level meter for
+three seconds. **Test Transcription** captures five seconds and displays Whisper's detected
+text. **Refresh Diagnostics** checks Ollama and lists local models; a missing model includes
+the exact `ollama pull` command needed to install it. The health summary enables **Save &
+Start** when an input is selected and the Ollama model is available.
+
+Settings are saved locally to the versioned, gitignored `my_data/settings.json` file. The
+window lets you change the Ollama and Whisper models, transcription language, response
+style, VAD and silence settings, input device, overlay appearance, session logging, and
+default application profile without editing Python files. The setup window appears each
+time the app starts so these choices remain accessible.
+
+After setup, an overlay window appears top-center and is pinned on top even when you click
 into the browser or another app. The app requests macOS's best-effort window
 capture exclusion, but current macOS versions do not guarantee it for entire-
 display capture. To ensure other participants cannot see the overlay, share
@@ -124,12 +137,13 @@ terminal.
 
 ## Troubleshooting
 
-- **Overlay shows "Ollama error: ... Connection refused"**: Ollama isn't
-  running. Run `ollama serve` in a terminal and leave it open — no need to
-  restart the app.
-- **`No input device matching 'BlackHole' found`**: BlackHole isn't
-  installed, or wasn't picked up — run `brew install blackhole-2ch` and
-  retry.
+- **Setup says Ollama is unreachable**: launch the Ollama app or run `ollama serve`,
+  then select **Refresh Diagnostics**.
+- **Setup says the selected model is missing**: run the displayed `ollama pull <model>`
+  command, then refresh the model list.
+- **No audio inputs are listed**: connect or enable an input, allow microphone access for
+  the terminal under macOS Privacy & Security, and restart the app. BlackHole is only
+  required when you want to capture the call's system audio.
 - **Can't hear the call yourself**: confirm both your speakers/headphones
   *and* BlackHole 2ch are checked in the Multi-Output Device (step 3), and
   that device is selected as your Mac's output.

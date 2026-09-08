@@ -4,7 +4,8 @@ from pathlib import Path
 
 import requests
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_URL = f"{DEFAULT_OLLAMA_BASE_URL}/api/generate"
 DEFAULT_MODEL = "qwen2.5:3b-instruct"
 MY_DATA_DIR = Path("my_data")
 APPLICATIONS_DIR = MY_DATA_DIR / "applications"
@@ -26,7 +27,8 @@ SYSTEM_PROMPT = (
     "You are an expert, highly experienced Software Engineer acting as a mock-interview practice "
     "coach. This tool is only for practice with a consenting friend, never for use during a real "
     "employer interview. The friend's voice is captured from the call's system audio through a "
-    "BlackHole virtual audio device and transcribed into a practice question. Your answer streams "
+    "selected input device (typically BlackHole for call system audio) and transcribed into a "
+    "practice question. Your answer streams "
     "into a small on-screen overlay for the candidate to study and rehearse — you never hear the "
     "candidate's microphone or address the friend directly, only the transcribed question and "
     "recent conversation.\n\n"
@@ -261,19 +263,35 @@ def build_prompt(
     )
 
 
-def preload(model: str = DEFAULT_MODEL) -> None:
+def _generate_url(base_url: str) -> str:
+    return f"{base_url.strip().rstrip('/')}/api/generate"
+
+
+def preload(
+    model: str = DEFAULT_MODEL,
+    base_url: str = DEFAULT_OLLAMA_BASE_URL,
+    *,
+    strict: bool = False,
+) -> None:
     """Warm the model into Ollama's memory so the first real question doesn't hit a cold-load timeout."""
     try:
-        requests.post(
-            OLLAMA_URL,
+        response = requests.post(
+            _generate_url(base_url),
             json={"model": model, "prompt": "Hi", "stream": False},
             timeout=120,
         )
+        response.raise_for_status()
     except requests.RequestException:
+        if strict:
+            raise
         pass  # the real error surfaces on the first real question via the overlay
 
 
-def generate_filler(partial_question: str, model: str = DEFAULT_MODEL) -> str:
+def generate_filler(
+    partial_question: str,
+    model: str = DEFAULT_MODEL,
+    base_url: str = DEFAULT_OLLAMA_BASE_URL,
+) -> str:
     prompt = (
         "You are an expert interview copilot. The user is asking an interview question but hasn't finished yet. "
         f"Partial question: \"{partial_question}\"\n\n"
@@ -287,7 +305,7 @@ def generate_filler(partial_question: str, model: str = DEFAULT_MODEL) -> str:
         "options": {"temperature": 0.1},
     }
     try:
-        response = requests.post(OLLAMA_URL, json=payload, timeout=10)
+        response = requests.post(_generate_url(base_url), json=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
         return data.get("response", "").strip().strip('"')
@@ -302,6 +320,7 @@ def stream_answer(
     model: str = DEFAULT_MODEL,
     profile_name: str | None = None,
     response_style: str = "default",
+    base_url: str = DEFAULT_OLLAMA_BASE_URL,
 ) -> Iterator[str]:
     num_predict = 180 if response_style == "shorter" else 320
     payload = {
@@ -321,7 +340,12 @@ def stream_answer(
             "num_predict": num_predict,
         },
     }
-    with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=60) as response:
+    with requests.post(
+        _generate_url(base_url),
+        json=payload,
+        stream=True,
+        timeout=60,
+    ) as response:
         response.raise_for_status()
         for line in response.iter_lines():
             if not line:
