@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QApplication
 import src.overlay as overlay_module
 from src.overlay import OverlayWindow
 from src.settings import AppSettings
+from src.coaching import CandidateAttempt, CoachingFeedback, SpeechMetrics
 
 _app = QApplication.instance() or QApplication([])
 
@@ -32,6 +33,57 @@ def test_saved_overlay_appearance_and_profile_are_applied():
     assert overlay.windowOpacity() == pytest.approx(0.78, abs=0.005)
     assert overlay._answer_font_size == 21
     assert overlay.selected_profile() == "ml-role"
+
+
+def test_candidate_feedback_shows_scores_grounding_and_attempt_comparison():
+    overlay = OverlayWindow(settings=AppSettings(candidate_capture_enabled=True))
+    feedback = CoachingFeedback(
+        question_type="technical",
+        scores={
+            "relevance": 4,
+            "star_completeness": None,
+            "clarity_structure": 3,
+            "conciseness": 4,
+            "technical_correctness": 4,
+            "profile_support": 5,
+        },
+        facts=("The response named O(n) complexity.",),
+        unsupported_claims=("The scale claim is not in the supplied profile.",),
+        missing_tradeoffs=("It did not compare memory use.",),
+        improvements=("State the trade-off.", "Lead with the approach."),
+        improved_answer="Use a hash map, grounded in the response.",
+    )
+    attempt = CandidateAttempt(
+        question="Explain the algorithm",
+        transcript="I would use a hash map.",
+        attempt_number=1,
+        transcription_confidence=0.92,
+        metrics=SpeechMetrics(12.0, 6, 30, (("um", 1),), ()),
+        feedback=feedback,
+    )
+
+    overlay.show_candidate_attempt(attempt)
+
+    rendered = overlay.candidate_feedback_view.toPlainText()
+    assert overlay.candidate_feedback_panel.isVisibleTo(overlay)
+    assert "Relevance 4/5" in rendered
+    assert "STAR —" in rendered
+    assert "Observed facts" in rendered
+    assert "Claims not supported by the supplied profile" in rendered
+    assert "Missing technical trade-offs" in rendered
+    assert "State the trade-off" in rendered
+    assert "Improved example" in rendered
+    assert overlay.candidate_attempt_combo.count() == 1
+
+
+def test_try_again_requests_another_candidate_attempt():
+    overlay = OverlayWindow(settings=AppSettings(candidate_capture_enabled=True))
+    requested = []
+    overlay.retry_candidate_answer_requested.connect(lambda: requested.append(True))
+
+    overlay.retry_candidate_button.click()
+
+    assert requested == [True]
 
 
 def test_drag_header_moves_window():

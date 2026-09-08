@@ -28,6 +28,7 @@ from src.diagnostics import (
     check_ollama,
     list_audio_input_devices,
     preferred_audio_device_index,
+    preferred_candidate_device_index,
 )
 from src.settings import (
     ANSWER_STYLES,
@@ -148,8 +149,10 @@ class SetupWindow(QDialog):
         self._audio_thread: AudioDiagnosticThread | None = None
         self._ollama_thread: OllamaCheckThread | None = None
         self._audio_test_passed = False
+        self._candidate_audio_test_passed = False
         self._transcription_test_passed = False
         self._diagnostic_is_transcription = False
+        self._diagnostic_source = "interviewer"
         self._settings_load_error = settings_load_error
 
         self.setWindowTitle("Interview Overlay Setup")
@@ -211,6 +214,10 @@ class SetupWindow(QDialog):
         group = QGroupBox("Audio capture")
         layout = QGridLayout(group)
         self.audio_device_combo = QComboBox()
+        self.candidate_capture_checkbox = QCheckBox(
+            "Enable candidate-response capture and coaching"
+        )
+        self.candidate_device_combo = QComboBox()
         self.audio_status_label = QLabel("Select an input device, then test it.")
         self.audio_status_label.setWordWrap(True)
         self.audio_meter = QProgressBar()
@@ -219,6 +226,8 @@ class SetupWindow(QDialog):
         self.audio_meter.setFormat("Input level %p%")
         self.test_audio_button = QPushButton("Test Audio Capture (3 sec)")
         self.test_audio_button.clicked.connect(self.test_audio_capture)
+        self.test_candidate_audio_button = QPushButton("Test Candidate Mic (3 sec)")
+        self.test_candidate_audio_button.clicked.connect(self.test_candidate_audio_capture)
         self.test_transcription_button = QPushButton("Test Transcription (5 sec)")
         self.test_transcription_button.clicked.connect(self.test_transcription)
         self.transcription_output = QPlainTextEdit()
@@ -227,14 +236,31 @@ class SetupWindow(QDialog):
         self.transcription_output.setPlaceholderText(
             "Detected text from the transcription test appears here."
         )
+        self.retain_candidate_audio_checkbox = QCheckBox(
+            "Retain candidate audio as local WAV files (optional)"
+        )
+        self.consent_checkbox = QCheckBox(
+            "Everyone consents to local audio capture and transcription."
+        )
+        self.consent_checkbox.setStyleSheet("font-weight: 600;")
+        self.consent_details_label = QLabel()
+        self.consent_details_label.setWordWrap(True)
+        self.consent_details_label.setStyleSheet("color: #555; font-size: 11px;")
 
-        layout.addWidget(QLabel("Input device"), 0, 0)
+        layout.addWidget(QLabel("Interviewer/call input"), 0, 0)
         layout.addWidget(self.audio_device_combo, 0, 1, 1, 2)
-        layout.addWidget(self.audio_meter, 1, 0, 1, 3)
-        layout.addWidget(self.test_audio_button, 2, 0)
-        layout.addWidget(self.test_transcription_button, 2, 1)
-        layout.addWidget(self.audio_status_label, 3, 0, 1, 3)
-        layout.addWidget(self.transcription_output, 4, 0, 1, 3)
+        layout.addWidget(self.candidate_capture_checkbox, 1, 0, 1, 3)
+        layout.addWidget(QLabel("Candidate microphone"), 2, 0)
+        layout.addWidget(self.candidate_device_combo, 2, 1, 1, 2)
+        layout.addWidget(self.audio_meter, 3, 0, 1, 3)
+        layout.addWidget(self.test_audio_button, 4, 0)
+        layout.addWidget(self.test_candidate_audio_button, 4, 1)
+        layout.addWidget(self.test_transcription_button, 4, 2)
+        layout.addWidget(self.audio_status_label, 5, 0, 1, 3)
+        layout.addWidget(self.transcription_output, 6, 0, 1, 3)
+        layout.addWidget(self.retain_candidate_audio_checkbox, 7, 0, 1, 3)
+        layout.addWidget(self.consent_checkbox, 8, 0, 1, 3)
+        layout.addWidget(self.consent_details_label, 9, 0, 1, 3)
         return group
 
     def _build_model_group(self) -> QGroupBox:
@@ -351,6 +377,42 @@ class SetupWindow(QDialog):
                 "No audio input device is available. Connect or enable one, grant "
                 "microphone permission, then restart the app."
             )
+        self._populate_candidate_devices()
+
+    def _populate_candidate_devices(self) -> None:
+        current_candidate = self.candidate_device_combo.currentData()
+        interviewer_index = self.audio_device_combo.currentData()
+        self.candidate_device_combo.clear()
+        candidates = [
+            device for device in self.devices if device.index != interviewer_index
+        ]
+        for device in candidates:
+            self.candidate_device_combo.addItem(
+                f"{device.name} ({device.channels} in)",
+                device.index,
+            )
+        try:
+            default_input_index = int(
+                self.pa.get_default_input_device_info().get("index")
+            )
+        except (AttributeError, OSError, TypeError, ValueError):
+            default_input_index = None
+        preferred = preferred_candidate_device_index(
+            self.devices,
+            interviewer_index,
+            current_candidate or self.settings.candidate_audio_device_index,
+            self.settings.candidate_audio_device_name,
+            default_input_index,
+        )
+        if preferred is not None:
+            self.candidate_device_combo.setCurrentIndex(
+                self.candidate_device_combo.findData(preferred)
+            )
+        if not candidates:
+            self.candidate_device_combo.addItem(
+                "No separate candidate microphone found",
+                None,
+            )
 
     def _load_form(self, settings: AppSettings) -> None:
         self.ollama_url_input.setText(settings.ollama_base_url)
@@ -366,6 +428,13 @@ class SetupWindow(QDialog):
         )
         self.silence_timeout_spin.setValue(settings.silence_timeout_ms)
         self.logging_checkbox.setChecked(settings.session_logging_enabled)
+        self.candidate_capture_checkbox.setChecked(
+            settings.candidate_capture_enabled
+        )
+        self.retain_candidate_audio_checkbox.setChecked(
+            settings.retain_candidate_audio
+        )
+        self.consent_checkbox.setChecked(False)
         profile_index = self.profile_combo.findData(
             settings.default_application_profile
         )
@@ -374,11 +443,23 @@ class SetupWindow(QDialog):
         self.overlay_height_spin.setValue(settings.overlay_height)
         self.overlay_opacity_spin.setValue(settings.overlay_opacity)
         self.overlay_font_size_spin.setValue(settings.overlay_font_size)
+        self._candidate_capture_changed(settings.candidate_capture_enabled)
+        self._retention_changed(settings.retain_candidate_audio)
 
     def _connect_change_signals(self) -> None:
         self.audio_device_combo.currentIndexChanged.connect(
             self._audio_device_changed
         )
+        self.candidate_device_combo.currentIndexChanged.connect(
+            self._candidate_device_changed
+        )
+        self.candidate_capture_checkbox.toggled.connect(
+            self._candidate_capture_changed
+        )
+        self.retain_candidate_audio_checkbox.toggled.connect(
+            self._retention_changed
+        )
+        self.consent_checkbox.toggled.connect(self._consent_changed)
         self.ollama_url_input.textChanged.connect(self._ollama_selection_changed)
         self.ollama_model_combo.currentTextChanged.connect(
             self._ollama_selection_changed
@@ -396,6 +477,45 @@ class SetupWindow(QDialog):
         self.audio_meter.setValue(0)
         self.audio_status_label.setText("Audio device changed — run a capture test.")
         self.transcription_output.clear()
+        self._populate_candidate_devices()
+        self._refresh_health()
+
+    def _candidate_device_changed(self) -> None:
+        self._candidate_audio_test_passed = False
+        self.audio_meter.setValue(0)
+        self.audio_status_label.setText(
+            "Candidate microphone changed — run its capture test."
+        )
+        self._refresh_health()
+
+    def _candidate_capture_changed(self, enabled: bool) -> None:
+        self.candidate_device_combo.setEnabled(enabled and bool(self.devices))
+        self.test_candidate_audio_button.setEnabled(
+            enabled and self.candidate_device_combo.currentData() is not None
+        )
+        self.retain_candidate_audio_checkbox.setEnabled(enabled)
+        if not enabled:
+            self.retain_candidate_audio_checkbox.setChecked(False)
+        self.consent_checkbox.setChecked(False)
+        self._refresh_health()
+
+    def _retention_changed(self, retained: bool) -> None:
+        disclosure = (
+            "Audio is processed locally. Candidate response audio will also be "
+            "retained as local WAV files because retention is enabled."
+            if retained
+            else "Audio is processed locally. Candidate audio is discarded after "
+            "transcription; only the transcript and feedback may be logged."
+        )
+        self.consent_details_label.setText(disclosure)
+        # Retention materially changes what the user is consenting to, so an
+        # already-checked box must never silently carry over.
+        self.consent_checkbox.setChecked(False)
+        self._refresh_health()
+
+    def _consent_changed(self, _confirmed: bool) -> None:
+        if not (self._audio_thread and self._audio_thread.isRunning()):
+            self._set_audio_buttons_enabled(True)
         self._refresh_health()
 
     def _ollama_selection_changed(self) -> None:
@@ -428,6 +548,15 @@ class SetupWindow(QDialog):
             (item for item in self.devices if item.index == device_index),
             None,
         )
+        candidate_device_index = self.candidate_device_combo.currentData()
+        candidate_device = next(
+            (
+                item
+                for item in self.devices
+                if item.index == candidate_device_index
+            ),
+            None,
+        )
         return AppSettings(
             ollama_base_url=self.ollama_url_input.text(),
             ollama_model=self.ollama_model_combo.currentText(),
@@ -438,6 +567,16 @@ class SetupWindow(QDialog):
             silence_timeout_ms=self.silence_timeout_spin.value(),
             audio_device_index=device.index if device else None,
             audio_device_name=device.name if device else None,
+            candidate_capture_enabled=self.candidate_capture_checkbox.isChecked(),
+            candidate_audio_device_index=(
+                candidate_device.index if candidate_device else None
+            ),
+            candidate_audio_device_name=(
+                candidate_device.name if candidate_device else None
+            ),
+            retain_candidate_audio=(
+                self.retain_candidate_audio_checkbox.isChecked()
+            ),
             overlay_width=self.overlay_width_spin.value(),
             overlay_height=self.overlay_height_spin.value(),
             overlay_opacity=self.overlay_opacity_spin.value(),
@@ -485,23 +624,48 @@ class SetupWindow(QDialog):
         self._ollama_thread = None
 
     def test_audio_capture(self) -> None:
-        self._start_audio_diagnostic(transcribe_audio=False, duration_seconds=3)
+        self._start_audio_diagnostic(
+            transcribe_audio=False,
+            duration_seconds=3,
+            device_index=self.audio_device_combo.currentData(),
+            source="interviewer",
+        )
+
+    def test_candidate_audio_capture(self) -> None:
+        self._start_audio_diagnostic(
+            transcribe_audio=False,
+            duration_seconds=3,
+            device_index=self.candidate_device_combo.currentData(),
+            source="candidate",
+        )
 
     def test_transcription(self) -> None:
         self.transcription_output.setPlainText(
             "Listening for five seconds, then loading Whisper…"
         )
-        self._start_audio_diagnostic(transcribe_audio=True, duration_seconds=5)
+        self._start_audio_diagnostic(
+            transcribe_audio=True,
+            duration_seconds=5,
+            device_index=self.audio_device_combo.currentData(),
+            source="interviewer",
+        )
 
     def _start_audio_diagnostic(
         self,
         *,
         transcribe_audio: bool,
         duration_seconds: float,
+        device_index: int | None,
+        source: str,
     ) -> None:
         if self._audio_thread is not None and self._audio_thread.isRunning():
             return
-        device_index = self.audio_device_combo.currentData()
+        if not self.consent_checkbox.isChecked():
+            self.audio_status_label.setText(
+                "Confirm session consent before capturing or transcribing audio."
+            )
+            self._refresh_health()
+            return
         if device_index is None:
             self.audio_status_label.setText(
                 "No audio input is selected. Connect a device and restart setup."
@@ -521,6 +685,7 @@ class SetupWindow(QDialog):
             whisper_language=self.whisper_language_combo.currentText().strip(),
         )
         self._diagnostic_is_transcription = transcribe_audio
+        self._diagnostic_source = source
         self._audio_thread.level_changed.connect(self.audio_meter.setValue)
         self._audio_thread.capture_complete.connect(self._audio_capture_complete)
         self._audio_thread.transcription_complete.connect(
@@ -531,7 +696,12 @@ class SetupWindow(QDialog):
         self._audio_thread.start()
 
     def _audio_capture_complete(self, message: str) -> None:
-        self._audio_test_passed = True
+        if self._diagnostic_source == "candidate":
+            self._candidate_audio_test_passed = True
+            message = "Candidate microphone: " + message
+        else:
+            self._audio_test_passed = True
+            message = "Interviewer input: " + message
         self.audio_status_label.setText(message)
         self._refresh_health()
 
@@ -553,7 +723,10 @@ class SetupWindow(QDialog):
         self._refresh_health()
 
     def _audio_failed(self, message: str) -> None:
-        self._audio_test_passed = False
+        if self._diagnostic_source == "candidate":
+            self._candidate_audio_test_passed = False
+        else:
+            self._audio_test_passed = False
         self._transcription_test_passed = False
         if self._diagnostic_is_transcription:
             self.audio_status_label.setText(
@@ -574,12 +747,27 @@ class SetupWindow(QDialog):
 
     def _set_audio_buttons_enabled(self, enabled: bool) -> None:
         has_device = bool(self.devices)
-        self.test_audio_button.setEnabled(enabled and has_device)
-        self.test_transcription_button.setEnabled(enabled and has_device)
+        consented = self.consent_checkbox.isChecked()
+        self.test_audio_button.setEnabled(enabled and has_device and consented)
+        self.test_transcription_button.setEnabled(enabled and has_device and consented)
         self.audio_device_combo.setEnabled(enabled and has_device)
+        candidate_enabled = self.candidate_capture_checkbox.isChecked()
+        self.test_candidate_audio_button.setEnabled(
+            enabled
+            and candidate_enabled
+            and consented
+            and self.candidate_device_combo.currentData() is not None
+        )
+        self.candidate_device_combo.setEnabled(enabled and candidate_enabled)
 
     def _refresh_health(self) -> None:
         audio_ready = self.audio_device_combo.currentData() is not None
+        candidate_enabled = self.candidate_capture_checkbox.isChecked()
+        candidate_ready = (
+            not candidate_enabled
+            or self.candidate_device_combo.currentData() is not None
+        )
+        consent_ready = self.consent_checkbox.isChecked()
         ollama_ready = bool(
             self.ollama_diagnostics and self.ollama_diagnostics.ready
         )
@@ -590,7 +778,13 @@ class SetupWindow(QDialog):
         items = [
             (audio_ready, "Audio input selected"),
             (self._audio_test_passed, "Audio capture tested"),
+            (
+                not candidate_enabled or self._candidate_audio_test_passed,
+                "Candidate microphone tested",
+            ),
             (self._transcription_test_passed, "Transcription tested"),
+            (candidate_ready, "Separate candidate microphone selected"),
+            (consent_ready, "Session consent confirmed"),
             (
                 bool(self.ollama_diagnostics and self.ollama_diagnostics.reachable),
                 "Ollama reachable",
@@ -603,7 +797,7 @@ class SetupWindow(QDialog):
                 "⚠ Existing settings could not be loaded; defaults are shown. "
                 + self._settings_load_error
             )
-        core_ready = audio_ready and ollama_ready
+        core_ready = audio_ready and candidate_ready and consent_ready and ollama_ready
         if core_ready and diagnostics_idle:
             lines.append("\nReady to start.")
         elif core_ready:
@@ -614,6 +808,8 @@ class SetupWindow(QDialog):
             )
         self.health_summary.setText("\n".join(lines))
         self.start_button.setEnabled(core_ready and diagnostics_idle)
+        if diagnostics_idle:
+            self._set_audio_buttons_enabled(True)
 
     def _save_only(self) -> bool:
         try:
@@ -632,6 +828,11 @@ class SetupWindow(QDialog):
     def _save_and_start(self) -> None:
         if not (
             self.audio_device_combo.currentData() is not None
+            and (
+                not self.candidate_capture_checkbox.isChecked()
+                or self.candidate_device_combo.currentData() is not None
+            )
+            and self.consent_checkbox.isChecked()
             and self.ollama_diagnostics
             and self.ollama_diagnostics.ready
             and not (self._audio_thread and self._audio_thread.isRunning())

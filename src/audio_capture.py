@@ -35,6 +35,10 @@ class UtteranceSegmenter:
         self._silence_trailing_frames = max(1, silence_trailing_ms // FRAME_MS)
         self._last_partial_count = 0
 
+    @property
+    def is_speaking(self) -> bool:
+        return bool(self._speech_frames)
+
     def push_frame(self, frame_bytes: bytes) -> tuple[bytes, bool] | None:
         is_speech = self._vad.is_speech(frame_bytes, SAMPLE_RATE)
 

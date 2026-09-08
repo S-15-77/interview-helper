@@ -43,7 +43,8 @@ See README/SETUP.md for the Multi-Output Device steps.
 
 ## Architecture
 
-Two background threads feed a PyQt6 GUI on the main thread; there is no web server.
+Separate interviewer and candidate capture/worker threads feed a PyQt6 GUI on the main
+thread; there is no web server.
 
 **Pipeline**, one utterance at a time:
 
@@ -86,6 +87,21 @@ Two background threads feed a PyQt6 GUI on the main thread; there is no web serv
    to conversation context.
 6. `Worker` also maintains a rolling `context` string (`trim_context`, capped at
    `CONTEXT_WORD_LIMIT` words) passed into the next `stream_answer` call for continuity.
+7. When candidate coaching is enabled, a second `PyAudio` instance and
+   `CandidateCaptureThread` read only the separately selected physical microphone. It stays
+   disarmed until the coached answer is complete, then uses its own `UtteranceSegmenter` to
+   detect start/end and sends a completed response through a separate bounded
+   `CandidateWorkQueue`. Candidate PCM never enters interviewer context or answer generation.
+8. `CandidateResponseWorker` transcribes that response locally, calculates deterministic
+   duration/pace/filler/repetition metrics, loads only the active application profile, and
+   asks Ollama for structured coaching. `coaching.py` scores relevance, STAR completeness,
+   clarity/structure, conciseness, technical correctness/trade-offs, and profile support.
+   Its prompt separates facts from suggestions, caps improvements at two, and forbids new
+   personal claims in the improved answer. A clearly labeled local fallback remains
+   actionable if model analysis fails.
+9. `AttemptTracker` numbers repeated answers by normalized question and compares score,
+   filler, and pace changes. The overlay's candidate panel can switch between attempts and
+   **Try Again** re-arms the same question/profile pair.
 
 **Personalization**: `llm_client.load_knowledge_base()` re-reads every `.md`/`.txt` file
 under `my_data/` (recursively) on *every* question and injects it into the prompt as
@@ -134,10 +150,17 @@ context. A collapsible panel adjusts width, height, opacity, and answer font siz
 **Setup and settings**: `SetupWindow` (in `setup_window.py`) runs before the overlay. It uses
 `diagnostics.py` to enumerate input devices, meter/test capture, test Whisper with visible
 text, and query Ollama's `/api/tags` endpoint for installed models. The health summary blocks
-startup until an audio input is selected and the configured Ollama model exists. All user
+startup until required inputs are selected, consent is confirmed, and the configured Ollama
+model exists. All user
 choices are validated by `settings.AppSettings` and atomically stored in the versioned,
 gitignored `my_data/settings.json`. `app.main()` then injects those settings into capture,
 transcription, generation, logging, the initial application profile, and overlay appearance.
+Version 2 migrates version-1 settings and adds candidate-capture, candidate-device, and
+optional audio-retention fields. Session consent is deliberately not persisted: Setup
+requires a fresh confirmation before tests or runtime capture, and changing retention resets
+the checkbox. By default candidate PCM is discarded after transcription. If retention is
+explicitly enabled, `SessionLogger` writes WAV files under `sessions/audio/<session-id>/`;
+transcript/feedback JSONL logging and audio retention are independent controls.
 
 **Shortcuts**: PyQt application shortcuts handle Ctrl+Option+P (pause), Escape (cancel), and
 Ctrl+Option+R (regenerate). On macOS, `NSEvent` global and local key-down monitors implement

@@ -113,24 +113,24 @@ helps users improve rather than only supplying an answer.
 
 ### Capture the candidate's response
 
-- [ ] Add a separate microphone input for the candidate.
-- [ ] Keep interviewer and candidate audio logically separate.
-- [ ] Detect when the candidate starts and finishes answering.
-- [ ] Transcribe the candidate's response locally.
-- [ ] Make audio recording optional; allow transcript-only storage.
-- [ ] Obtain clear consent before recording or retaining any audio.
+- [x] Add a separate microphone input for the candidate.
+- [x] Keep interviewer and candidate audio logically separate.
+- [x] Detect when the candidate starts and finishes answering.
+- [x] Transcribe the candidate's response locally.
+- [x] Make audio recording optional; allow transcript-only storage.
+- [x] Obtain clear consent before recording or retaining any audio.
 
 ### Analyze each answer
 
-- [ ] Score relevance to the question.
-- [ ] Evaluate STAR completeness for behavioral answers.
-- [ ] Evaluate clarity, structure, and conciseness.
-- [ ] Detect filler words and repeated phrases.
-- [ ] Estimate speaking pace and answer duration.
-- [ ] Check technical correctness and missing trade-offs.
-- [ ] Check whether claims are supported by the selected profile.
-- [ ] Identify one or two concrete improvements instead of overwhelming the user.
-- [ ] Produce an improved example answer grounded in the candidate's actual experience.
+- [x] Score relevance to the question.
+- [x] Evaluate STAR completeness for behavioral answers.
+- [x] Evaluate clarity, structure, and conciseness.
+- [x] Detect filler words and repeated phrases.
+- [x] Estimate speaking pace and answer duration.
+- [x] Check technical correctness and missing trade-offs.
+- [x] Check whether claims are supported by the selected profile.
+- [x] Identify one or two concrete improvements instead of overwhelming the user.
+- [x] Produce an improved example answer grounded in the candidate's actual experience.
 
 ### Definition of done
 

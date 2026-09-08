@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -79,6 +80,9 @@ class OverlaySignals(QObject):
     visibility_toggle_requested = pyqtSignal()
     error_shown = pyqtSignal(str)
     status_changed = pyqtSignal(str)
+    candidate_state_changed = pyqtSignal(str)
+    candidate_transcript_detected = pyqtSignal(str, float, float)
+    candidate_attempt_ready = pyqtSignal(object)
 
 
 class OverlayWindow(QWidget):
@@ -92,6 +96,7 @@ class OverlayWindow(QWidget):
     shorter_answer_requested = pyqtSignal()
     more_detail_requested = pyqtSignal()
     profile_changed = pyqtSignal(object)
+    retry_candidate_answer_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -116,6 +121,12 @@ class OverlayWindow(QWidget):
         self.signals.visibility_toggle_requested.connect(self._toggle_visibility)
         self.signals.error_shown.connect(self._on_error_shown)
         self.signals.status_changed.connect(self._on_status_changed)
+        self.signals.candidate_state_changed.connect(self._on_candidate_state_changed)
+        self.signals.candidate_transcript_detected.connect(
+            self._on_candidate_transcript_detected
+        )
+        self.signals.candidate_attempt_ready.connect(self._on_candidate_attempt_ready)
+        self._candidate_attempts = []
 
         # ponytail: no Qt.WindowType.Tool here on purpose — Qt maps Tool to a
         # native NSPanel (QNSPanel) and keeps re-asserting its own "tool
@@ -358,6 +369,14 @@ class OverlayWindow(QWidget):
         controls_layout.addLayout(primary_controls)
         controls_layout.addLayout(secondary_controls)
 
+        self.candidate_state_label = QLabel("Candidate mic: waiting for a question.")
+        self.candidate_state_label.setStyleSheet(
+            "color: rgba(180, 220, 255, 190); font-size: 10px;"
+        )
+        self.candidate_state_label.setWordWrap(True)
+        self.candidate_state_label.setVisible(settings.candidate_capture_enabled)
+        controls_layout.addWidget(self.candidate_state_label)
+
         self.width_slider = self._view_slider(360, 800, settings.overlay_width)
         self.height_slider = self._view_slider(300, 900, settings.overlay_height)
         self.opacity_slider = self._view_slider(35, 100, settings.overlay_opacity)
@@ -398,6 +417,58 @@ class OverlayWindow(QWidget):
             view_layout.addWidget(label, row, 0)
             view_layout.addWidget(slider, row, 1)
         self.view_settings_panel.setVisible(False)
+
+        self.candidate_feedback_panel = QWidget()
+        self.candidate_feedback_panel.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground,
+            True,
+        )
+        self.candidate_feedback_panel.setStyleSheet(
+            "background-color: rgba(22, 34, 30, 235); color: white;"
+        )
+        candidate_layout = QVBoxLayout(self.candidate_feedback_panel)
+        candidate_layout.setContentsMargins(8, 6, 8, 7)
+        candidate_layout.setSpacing(4)
+        candidate_header = QHBoxLayout()
+        candidate_title = QLabel("Your practice response")
+        candidate_title.setStyleSheet(
+            "color: #8bd49c; font-size: 11px; font-weight: 600;"
+        )
+        self.candidate_attempt_combo = QComboBox()
+        self.candidate_attempt_combo.setMinimumWidth(150)
+        self.candidate_attempt_combo.currentIndexChanged.connect(
+            self._render_candidate_attempt
+        )
+        self.retry_candidate_button = QPushButton("Try Again")
+        self.retry_candidate_button.setStyleSheet(control_button_style)
+        self.retry_candidate_button.clicked.connect(
+            self.retry_candidate_answer_requested.emit
+        )
+        candidate_header.addWidget(candidate_title)
+        candidate_header.addStretch()
+        candidate_header.addWidget(self.candidate_attempt_combo)
+        candidate_header.addWidget(self.retry_candidate_button)
+        candidate_layout.addLayout(candidate_header)
+
+        self.candidate_transcript_label = QLabel("")
+        self.candidate_transcript_label.setWordWrap(True)
+        self.candidate_transcript_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.candidate_transcript_label.setStyleSheet(
+            "color: rgba(255, 255, 255, 190); font-size: 11px;"
+        )
+        candidate_layout.addWidget(self.candidate_transcript_label)
+
+        self.candidate_feedback_view = QTextBrowser()
+        self.candidate_feedback_view.setOpenExternalLinks(False)
+        self.candidate_feedback_view.setMaximumHeight(230)
+        self.candidate_feedback_view.setStyleSheet(
+            "QTextBrowser { background: rgba(0, 0, 0, 35); color: white; "
+            "border: none; padding: 4px; font-size: 11px; }"
+        )
+        candidate_layout.addWidget(self.candidate_feedback_view)
+        self.candidate_feedback_panel.setVisible(False)
 
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.label)
@@ -446,6 +517,7 @@ class OverlayWindow(QWidget):
         layout.addWidget(self.transcript_panel)
         layout.addWidget(self.controls_panel)
         layout.addWidget(self.view_settings_panel)
+        layout.addWidget(self.candidate_feedback_panel)
         layout.addWidget(self.scroll)
         layout.addWidget(self.input_panel)
         self.setLayout(layout)
@@ -698,6 +770,109 @@ class OverlayWindow(QWidget):
         if not self._history_started:
             self.label.setText(html.escape(message))
 
+    def _on_candidate_state_changed(self, message: str):
+        self.candidate_state_label.setText(message)
+
+    def _on_candidate_transcript_detected(
+        self,
+        transcript: str,
+        confidence: float,
+        no_speech_probability: float,
+    ):
+        text = transcript.strip() or "No clear candidate speech was detected."
+        self.candidate_transcript_label.setText(
+            "<b>Detected response:</b> "
+            + html.escape(text)
+            + f" <span style='color:rgba(255,255,255,130);'>"
+            f"(confidence {confidence:.0%}, no-speech {no_speech_probability:.0%})</span>"
+        )
+        self.candidate_feedback_panel.setVisible(True)
+
+    @staticmethod
+    def _score_label(value) -> str:
+        return "—" if value is None else f"{value}/5"
+
+    def _on_candidate_attempt_ready(self, attempt):
+        self._candidate_attempts.append(attempt)
+        self.candidate_attempt_combo.blockSignals(True)
+        question_label = attempt.question.strip().replace("\n", " ")
+        if len(question_label) > 22:
+            question_label = question_label[:21] + "…"
+        self.candidate_attempt_combo.addItem(
+            f"{question_label} · #{attempt.attempt_number}"
+        )
+        self.candidate_attempt_combo.setCurrentIndex(
+            self.candidate_attempt_combo.count() - 1
+        )
+        self.candidate_attempt_combo.blockSignals(False)
+        self._render_candidate_attempt(len(self._candidate_attempts) - 1)
+        self.candidate_feedback_panel.setVisible(True)
+
+    def _render_candidate_attempt(self, index: int):
+        if not 0 <= index < len(self._candidate_attempts):
+            return
+        attempt = self._candidate_attempts[index]
+        feedback = attempt.feedback
+        metrics = attempt.metrics
+        self.candidate_transcript_label.setText(
+            "<b>Detected response:</b> "
+            + html.escape(attempt.transcript or "No clear speech detected.")
+        )
+        score_names = (
+            ("Relevance", "relevance"),
+            ("STAR", "star_completeness"),
+            ("Clarity", "clarity_structure"),
+            ("Conciseness", "conciseness"),
+            ("Technical", "technical_correctness"),
+            ("Profile support", "profile_support"),
+        )
+        scores = " • ".join(
+            f"{label} {self._score_label(feedback.scores.get(key))}"
+            for label, key in score_names
+        )
+        filler_detail = ", ".join(
+            f"{name} ×{count}" for name, count in metrics.filler_counts
+        ) or "none"
+        repeated = ", ".join(metrics.repeated_phrases) or "none"
+        facts = "".join(f"<li>{html.escape(item)}</li>" for item in feedback.facts)
+        improvements = "".join(
+            f"<li>{html.escape(item)}</li>" for item in feedback.improvements
+        )
+        unsupported = "".join(
+            f"<li>{html.escape(item)}</li>" for item in feedback.unsupported_claims
+        )
+        tradeoffs = "".join(
+            f"<li>{html.escape(item)}</li>" for item in feedback.missing_tradeoffs
+        )
+        comparison = (
+            f"<p><b>Compared with attempt {attempt.comparison.previous_attempt_number}:</b> "
+            f"{html.escape(attempt.comparison.summary)}</p>"
+            if attempt.comparison
+            else "<p><b>Comparison:</b> First attempt for this question.</p>"
+        )
+        support_section = (
+            f"<p><b>Claims not supported by the supplied profile:</b></p><ul>{unsupported}</ul>"
+            if unsupported
+            else "<p><b>Profile check:</b> No unsupported claims were flagged.</p>"
+        )
+        tradeoff_section = (
+            f"<p><b>Missing technical trade-offs:</b></p><ul>{tradeoffs}</ul>"
+            if tradeoffs
+            else ""
+        )
+        self.candidate_feedback_view.setHtml(
+            f"<p><b>Scores:</b> {scores}</p>"
+            f"<p><b>Measured:</b> {metrics.duration_seconds:.1f}s • "
+            f"{metrics.words_per_minute} wpm • fillers: {html.escape(filler_detail)} • "
+            f"repeated phrases: {html.escape(repeated)}</p>"
+            f"<p><b>Observed facts:</b></p><ul>{facts}</ul>"
+            f"{support_section}{tradeoff_section}"
+            f"<p><b>Improvements:</b></p><ol>{improvements}</ol>"
+            f"<p><b>Improved example:</b><br>{html.escape(feedback.improved_answer).replace(chr(10), '<br>')}</p>"
+            f"{comparison}"
+            f"<p style='color:#aaa;'>Analysis source: {html.escape(feedback.source)}</p>"
+        )
+
     def _on_pause_toggled(self, paused: bool):
         self.pause_button.setText("Resume" if paused else "Pause")
         self.listening_paused_changed.emit(paused)
@@ -777,3 +952,21 @@ class OverlayWindow(QWidget):
 
     def show_status(self, message: str):
         self.signals.status_changed.emit(message)
+
+    def show_candidate_state(self, message: str):
+        self.signals.candidate_state_changed.emit(message)
+
+    def show_candidate_transcript(
+        self,
+        transcript: str,
+        confidence: float,
+        no_speech_probability: float,
+    ):
+        self.signals.candidate_transcript_detected.emit(
+            transcript,
+            confidence,
+            no_speech_probability,
+        )
+
+    def show_candidate_attempt(self, attempt):
+        self.signals.candidate_attempt_ready.emit(attempt)

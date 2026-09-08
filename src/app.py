@@ -20,6 +20,11 @@ from src.audio_capture import (
     UtteranceSegmenter,
     open_capture_stream,
 )
+from src.candidate_capture import (
+    CandidateCaptureThread,
+    CandidateResponseWorker,
+    CandidateWorkQueue,
+)
 from src.llm_client import DEFAULT_MODEL, DEFAULT_OLLAMA_BASE_URL
 from src.llm_client import preload as preload_llm
 from src.llm_client import list_application_profiles, stream_answer
@@ -197,6 +202,7 @@ class Worker(threading.Thread):
         whisper_model: str = "base.en",
         whisper_language: str = "en",
         default_response_style: str = "default",
+        candidate_coach=None,
     ):
         super().__init__(daemon=True)
         self.work_queue = work_queue
@@ -207,6 +213,7 @@ class Worker(threading.Thread):
         self.whisper_model = whisper_model
         self.whisper_language = whisper_language
         self.default_response_style = default_response_style
+        self.candidate_coach = candidate_coach
         self.context = ""
         self.current_filler = ""
         self._partial_thread: threading.Thread | None = None
@@ -309,6 +316,8 @@ class Worker(threading.Thread):
         self.work_queue.clear()
         cancelled = self._cancel_active_operation()
         self._take_current_filler()
+        if self.candidate_coach is not None:
+            self.candidate_coach.cancel_listening()
         self.overlay.show_status("Cancelling…" if cancelled else self._idle_status())
 
     def _idle_status(self, detail: str | None = None) -> str:
@@ -376,6 +385,8 @@ class Worker(threading.Thread):
             self.context = ""
         with self._last_answer_lock:
             self._last_answer_request = None
+        if self.candidate_coach is not None:
+            self.candidate_coach.capture.disarm()
 
     def _prompt_state(self) -> tuple[str, str | None]:
         with self._profile_lock:
@@ -417,6 +428,8 @@ class Worker(threading.Thread):
             return
 
         selected_style = response_style or self.default_response_style
+        if self.candidate_coach is not None:
+            self.candidate_coach.cancel_listening()
         self.overlay.begin_question(question)
         if filler:
             self.overlay.append_text(f"{filler}\n\n")
@@ -504,6 +517,8 @@ class Worker(threading.Thread):
                 f"first {first_token_label} • total {total_seconds:.1f}s"
             )
         )
+        if self.candidate_coach is not None:
+            self.candidate_coach.arm_for_question(question, profile_name)
 
     def run(self):
         while True:
@@ -726,8 +741,56 @@ def main():
     logger = SessionLogger(
         Path("sessions"),
         enabled=settings.session_logging_enabled,
+        audio_enabled=settings.retain_candidate_audio,
     )
     work_queue = WorkQueue()
+
+    candidate_capture = None
+    candidate_worker = None
+    candidate_pa = None
+    if settings.candidate_capture_enabled:
+        candidate_device_index = settings.candidate_audio_device_index
+        if candidate_device_index is None:
+            pa.terminate()
+            QMessageBox.critical(
+                None,
+                "Candidate microphone missing",
+                "Candidate coaching is enabled but no separate microphone is "
+                "selected. Reopen Setup and choose one, or disable candidate capture.",
+            )
+            return
+        try:
+            candidate_pa = pyaudio.PyAudio()
+        except Exception as exc:
+            pa.terminate()
+            QMessageBox.critical(
+                None,
+                "Candidate microphone initialization failed",
+                f"The candidate microphone service could not start: {exc}. "
+                "Reopen Setup and test the candidate microphone.",
+            )
+            return
+        candidate_queue = CandidateWorkQueue()
+        candidate_capture = CandidateCaptureThread(
+            candidate_queue,
+            candidate_pa,
+            candidate_device_index,
+            overlay,
+            vad_aggressiveness=settings.vad_aggressiveness,
+            silence_timeout_ms=settings.silence_timeout_ms,
+        )
+        candidate_worker = CandidateResponseWorker(
+            candidate_queue,
+            candidate_capture,
+            overlay,
+            logger,
+            whisper_model=settings.whisper_model,
+            whisper_language=settings.whisper_language,
+            ollama_model=settings.ollama_model,
+            ollama_base_url=settings.ollama_base_url,
+        )
+        overlay.retry_candidate_answer_requested.connect(candidate_worker.retry_last)
+        overlay.listening_paused_changed.connect(candidate_worker.set_paused)
 
     worker = Worker(
         work_queue,
@@ -738,6 +801,7 @@ def main():
         whisper_model=settings.whisper_model,
         whisper_language=settings.whisper_language,
         default_response_style=settings.answer_style,
+        candidate_coach=candidate_worker,
     )
     worker.set_profile(overlay.selected_profile())
     overlay.manual_question_submitted.connect(worker.submit_manual_question)
@@ -803,11 +867,25 @@ def main():
                 if startup_cancelled.is_set():
                     return
                 worker.start()
+                if candidate_worker is not None:
+                    candidate_worker.start()
                 capture.start()
+                if candidate_capture is not None:
+                    candidate_capture.start()
             overlay.show_status("Listening…")
         except Exception as exc:
             if not startup_cancelled.is_set():
-                pa.terminate()
+                capture.stop()
+                if worker.ident is not None:
+                    worker.stop()
+                if candidate_worker is not None:
+                    candidate_worker.stop()
+                if capture.ident is None:
+                    pa.terminate()
+                if candidate_pa is not None and (
+                    candidate_capture is None or candidate_capture.ident is None
+                ):
+                    candidate_pa.terminate()
                 overlay.show_error(f"Startup failed: {exc}")
 
     startup_thread = threading.Thread(target=initialize_services, daemon=True)
@@ -830,12 +908,28 @@ def main():
             worker_was_started = worker.ident is not None
             if worker_was_started:
                 worker.stop()
+            candidate_capture_was_started = bool(
+                candidate_capture is not None and candidate_capture.ident is not None
+            )
+            candidate_worker_was_started = bool(
+                candidate_worker is not None and candidate_worker.ident is not None
+            )
+            if candidate_worker_was_started:
+                candidate_worker.stop()
+            elif candidate_capture is not None:
+                candidate_capture.stop()
             if not capture_was_started:
                 pa.terminate()
+            if candidate_pa is not None and not candidate_capture_was_started:
+                candidate_pa.terminate()
         if capture.is_alive():
             capture.join(timeout=2)
         if worker.is_alive():
             worker.join(timeout=1)
+        if candidate_capture is not None and candidate_capture.is_alive():
+            candidate_capture.join(timeout=2)
+        if candidate_worker is not None and candidate_worker.is_alive():
+            candidate_worker.join(timeout=1)
         overlay.stop_global_visibility_shortcut()
         app.quit()
 
