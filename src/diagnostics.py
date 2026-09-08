@@ -82,6 +82,60 @@ def preferred_audio_device_index(
     )
 
 
+def preferred_candidate_device_index(
+    devices: list[AudioInputDevice],
+    interviewer_device_index: int | None,
+    saved_index: int | None = None,
+    saved_name: str | None = None,
+    default_input_index: int | None = None,
+) -> int | None:
+    candidates = [
+        device for device in devices if device.index != interviewer_device_index
+    ]
+    if saved_index is not None:
+        saved = next(
+            (device for device in candidates if device.index == saved_index),
+            None,
+        )
+        if saved is not None and (
+            not saved_name or saved.name.casefold() == saved_name.casefold()
+        ):
+            return saved.index
+    if saved_name:
+        saved = next(
+            (
+                device
+                for device in candidates
+                if device.name.casefold() == saved_name.casefold()
+            ),
+            None,
+        )
+        if saved is not None:
+            return saved.index
+    default_input = next(
+        (
+            device
+            for device in candidates
+            if device.index == default_input_index
+            and "blackhole" not in device.name.casefold()
+        ),
+        None,
+    )
+    if default_input is not None:
+        return default_input.index
+    physical_input = next(
+        (
+            device
+            for device in candidates
+            if "blackhole" not in device.name.casefold()
+        ),
+        None,
+    )
+    return physical_input.index if physical_input is not None else (
+        candidates[0].index if candidates else None
+    )
+
+
 def audio_level_percent(pcm_bytes: bytes) -> int:
     if not pcm_bytes:
         return 0

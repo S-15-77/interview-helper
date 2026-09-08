@@ -79,13 +79,21 @@ and review the remaining settings. **Test Audio Capture** shows a live level met
 three seconds. **Test Transcription** captures five seconds and displays Whisper's detected
 text. **Refresh Diagnostics** checks Ollama and lists local models; a missing model includes
 the exact `ollama pull` command needed to install it. The health summary enables **Save &
-Start** when an input is selected and the Ollama model is available.
+Start** when the required inputs and Ollama model are available and session consent is
+confirmed.
 
 Settings are saved locally to the versioned, gitignored `my_data/settings.json` file. The
 window lets you change the Ollama and Whisper models, transcription language, response
 style, VAD and silence settings, input device, overlay appearance, session logging, and
 default application profile without editing Python files. The setup window appears each
 time the app starts so these choices remain accessible.
+
+For candidate-response coaching, enable **Candidate-response capture**, choose a physical
+microphone that is different from the interviewer/call input, and confirm the session
+consent checkbox. Consent is intentionally requested again every launch and is required
+even for audio tests. Candidate audio is discarded immediately after local transcription
+by default. Enable **Retain candidate audio** only when everyone also consents to saving WAV
+files; transcript-only session logging remains available without retaining audio.
 
 After setup, an overlay window appears top-center and is pinned on top even when you click
 into the browser or another app. The app requests macOS's best-effort window
@@ -117,14 +125,27 @@ remain available for review, but are not sent to the language model automaticall
 
 The control bar provides the rest of the live session controls:
 
-- **Pause/Resume** stops call-audio processing without interrupting an answer already being
-  generated. Resuming starts with a fresh speech buffer.
+- **Pause/Resume** stops both interviewer and candidate audio processing without interrupting
+  an answer already being generated. Resuming starts with fresh speech buffers.
 - **Regenerate**, **Shorter**, and **More Detail** replace the latest answer while reusing
   the context from before that answer, so the old response does not bias its replacement.
 - **Clear** resets only the visible overlay history. Session JSONL logs remain on disk.
 - **Copy Answer** copies the latest answer as plain text; **Copy Session** copies all visible
   questions and answers.
 - **View** opens sliders for overlay width, height, opacity, and answer font size.
+
+When candidate coaching is enabled, the candidate microphone begins listening after the
+coached answer is ready. It detects when the candidate starts and finishes speaking, then
+shows the detected response and actionable feedback. The panel includes relevance, STAR,
+clarity, conciseness, technical-correctness, and profile-support scores where applicable;
+measured duration, speaking pace, filler words, and repeated phrases; clearly separated
+observed facts and suggestions; missing trade-offs; and a grounded improved example.
+Select **Try Again** to answer the same question another time. Attempts are numbered and
+the newest one is compared with the previous attempt for that question.
+
+Candidate transcripts, metrics, feedback, and comparisons are added to the session JSONL
+when logging is enabled. Optional retained audio is stored under
+`sessions/audio/<session-id>/`; it is never required for feedback.
 
 Keyboard shortcuts are **Ctrl+Option+P** for Pause/Resume, **Esc** for Cancel, and
 **Ctrl+Option+R** for Regenerate while the Interview Overlay app is active. On macOS,

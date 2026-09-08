@@ -34,7 +34,9 @@ def test_prompt_describes_the_audio_source_accurately():
     assert "friend's voice is captured from the call's system audio" in prompt
     assert "selected input device" in prompt
     assert "BlackHole for call system audio" in prompt
-    assert "never hear the candidate's microphone" in prompt
+    assert "separate candidate microphone" in prompt
+    assert "explicit session consent" in prompt
+    assert "kept logically separate" in prompt
 
 
 def test_prompt_forbids_fabricated_personal_experience():

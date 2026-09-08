@@ -118,6 +118,26 @@ def test_answer_uses_selected_application_profile():
     assert log_kwargs["timings"]["total_ms"] >= 0
 
 
+def test_completed_coached_answer_arms_candidate_microphone_for_same_question():
+    candidate_coach = Mock()
+    worker = Worker(
+        WorkQueue(),
+        Mock(),
+        Mock(),
+        candidate_coach=candidate_coach,
+    )
+    worker.set_profile("compiler-role")
+    candidate_coach.reset_mock()
+
+    with patch("src.app.stream_answer", return_value=iter(["Practice answer"])):
+        worker._answer_question("Tell me about a difficult project.")
+
+    candidate_coach.arm_for_question.assert_called_once_with(
+        "Tell me about a difficult project.",
+        "compiler-role",
+    )
+
+
 def test_work_queue_is_bounded_and_replaces_stale_audio():
     work_queue = WorkQueue(maxsize=1)
 

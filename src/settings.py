@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2
 DEFAULT_SETTINGS_PATH = Path("my_data/settings.json")
 ANSWER_STYLES = ("default", "shorter", "more_detail")
 
@@ -25,6 +25,10 @@ class AppSettings:
     silence_timeout_ms: int = 1000
     audio_device_index: int | None = None
     audio_device_name: str | None = None
+    candidate_capture_enabled: bool = True
+    candidate_audio_device_index: int | None = None
+    candidate_audio_device_name: str | None = None
+    retain_candidate_audio: bool = False
     overlay_width: int = 480
     overlay_height: int = 500
     overlay_opacity: int = 100
@@ -55,6 +59,23 @@ class AppSettings:
             raise SettingsError("Silence timeout must be between 300 and 5000 ms.")
         if self.audio_device_index is not None and self.audio_device_index < 0:
             raise SettingsError("Audio device index cannot be negative.")
+        if (
+            self.candidate_audio_device_index is not None
+            and self.candidate_audio_device_index < 0
+        ):
+            raise SettingsError("Candidate microphone index cannot be negative.")
+        if self.retain_candidate_audio and not self.candidate_capture_enabled:
+            raise SettingsError(
+                "Candidate audio cannot be retained while candidate capture is disabled."
+            )
+        if (
+            self.candidate_capture_enabled
+            and self.audio_device_index is not None
+            and self.candidate_audio_device_index == self.audio_device_index
+        ):
+            raise SettingsError(
+                "Interviewer audio and the candidate microphone must use different inputs."
+            )
         if not 360 <= self.overlay_width <= 800:
             raise SettingsError("Overlay width must be between 360 and 800 pixels.")
         if not 300 <= self.overlay_height <= 900:
@@ -70,6 +91,10 @@ class AppSettings:
             whisper_model=self.whisper_model.strip(),
             whisper_language=self.whisper_language.strip(),
             audio_device_name=(self.audio_device_name or "").strip() or None,
+            candidate_audio_device_name=(
+                self.candidate_audio_device_name or ""
+            ).strip()
+            or None,
             default_application_profile=(
                 self.default_application_profile or ""
             ).strip()
@@ -94,6 +119,10 @@ class AppSettings:
                 "device_name": settings.audio_device_name,
                 "vad_aggressiveness": settings.vad_aggressiveness,
                 "silence_timeout_ms": settings.silence_timeout_ms,
+                "candidate_capture_enabled": settings.candidate_capture_enabled,
+                "candidate_device_index": settings.candidate_audio_device_index,
+                "candidate_device_name": settings.candidate_audio_device_name,
+                "retain_candidate_audio": settings.retain_candidate_audio,
             },
             "overlay": {
                 "width": settings.overlay_width,
@@ -114,7 +143,7 @@ class AppSettings:
         version = raw.get("version", SETTINGS_VERSION)
         if isinstance(version, bool) or not isinstance(version, int):
             raise SettingsError("Settings version must be an integer.")
-        if version != SETTINGS_VERSION:
+        if version not in (1, SETTINGS_VERSION):
             raise SettingsError(
                 f"Unsupported settings version {version}; expected {SETTINGS_VERSION}."
             )
@@ -130,7 +159,7 @@ class AppSettings:
 
         try:
             settings = cls(
-                version=version,
+                version=SETTINGS_VERSION,
                 ollama_base_url=_text(
                     ollama.get("base_url", defaults.ollama_base_url),
                     "ollama.base_url",
@@ -162,6 +191,33 @@ class AppSettings:
                 ),
                 audio_device_name=_optional_string(
                     audio.get("device_name", defaults.audio_device_name)
+                ),
+                candidate_capture_enabled=_boolean(
+                    audio.get(
+                        "candidate_capture_enabled",
+                        defaults.candidate_capture_enabled,
+                    ),
+                    "audio.candidate_capture_enabled",
+                ),
+                candidate_audio_device_index=_optional_integer(
+                    audio.get(
+                        "candidate_device_index",
+                        defaults.candidate_audio_device_index,
+                    ),
+                    "audio.candidate_device_index",
+                ),
+                candidate_audio_device_name=_optional_string(
+                    audio.get(
+                        "candidate_device_name",
+                        defaults.candidate_audio_device_name,
+                    )
+                ),
+                retain_candidate_audio=_boolean(
+                    audio.get(
+                        "retain_candidate_audio",
+                        defaults.retain_candidate_audio,
+                    ),
+                    "audio.retain_candidate_audio",
                 ),
                 overlay_width=_integer(
                     overlay.get("width", defaults.overlay_width), "overlay.width"

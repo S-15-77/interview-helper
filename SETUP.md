@@ -131,11 +131,16 @@ The first time it runs, macOS may ask for microphone permission — allow it.
 The **Interview Overlay Setup** window appears before capture begins:
 
 1. Choose the audio input. BlackHole is recommended for call audio, but any input works.
-2. Select a local Ollama model and the Whisper model/language.
-3. Use **Test Audio Capture** to watch the live input meter.
-4. Use **Test Transcription** and confirm the detected text.
-5. Select **Refresh Diagnostics** to recheck Ollama or installed models.
-6. Review the health summary and select **Save & Start**.
+2. For response coaching, choose a different physical input as the candidate microphone.
+3. Select whether candidate audio should be discarded after transcription (the default) or
+   retained as local WAV files.
+4. Confirm that everyone in this practice session consents. This is required again on every
+   launch and before any audio test or capture begins.
+5. Select a local Ollama model and the Whisper model/language.
+6. Use **Test Audio Capture** and **Test Candidate Mic** to watch the live input meter.
+7. Use **Test Transcription** and confirm the detected text.
+8. Select **Refresh Diagnostics** to recheck Ollama or installed models.
+9. Review the health summary and select **Save & Start**.
 
 The same window configures answer style, VAD aggressiveness, silence timeout, overlay size
 and opacity, session logging, and the default application profile. Settings are stored in
@@ -159,6 +164,16 @@ The shortcuts are **Ctrl+Option+P** (pause/resume), **Esc** (cancel), and
 **Ctrl+Option+R** (regenerate) while the app is active. **Ctrl+Option+I** shows/hides the
 overlay system-wide; if macOS does not respond to it, enable your terminal or packaged app
 under **System Settings → Privacy & Security → Accessibility**.
+
+After each coached answer, the separate candidate microphone listens for your response. It
+automatically detects the start and end, transcribes locally, and displays scores, measured
+speaking data, profile-grounding checks, up to two improvements, and a grounded improved
+example. **Try Again** records another attempt for the same question and shows how the
+scores, filler count, and pace changed. If Ollama becomes unavailable, local metrics and
+clearly labeled fallback guidance still appear.
+
+With session logging enabled, transcripts and feedback are stored in the session JSONL.
+Audio is not retained unless the separate WAV-retention option was enabled with consent.
 
 To stop: press `Ctrl+C` in the terminal running the app.
 

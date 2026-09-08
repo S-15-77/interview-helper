@@ -46,7 +46,7 @@ def ready_ollama(model="qwen2.5:3b-instruct"):
 def test_setup_form_exposes_and_saves_all_settings(tmp_path):
     path = tmp_path / "settings.json"
     setup = SetupWindow(
-        FakePyAudio([input_device()]),
+        FakePyAudio([input_device(), input_device("Candidate Microphone")]),
         AppSettings(),
         application_profiles=["compiler-role"],
         settings_path=path,
@@ -64,6 +64,7 @@ def test_setup_form_exposes_and_saves_all_settings(tmp_path):
         setup.profile_combo.findData("compiler-role")
     )
     setup.logging_checkbox.setChecked(False)
+    setup.retain_candidate_audio_checkbox.setChecked(True)
     setup.overlay_width_spin.setValue(650)
     setup.overlay_height_spin.setValue(700)
     setup.overlay_opacity_spin.setValue(75)
@@ -81,24 +82,31 @@ def test_setup_form_exposes_and_saves_all_settings(tmp_path):
     assert saved.silence_timeout_ms == 1600
     assert saved.default_application_profile == "compiler-role"
     assert not saved.session_logging_enabled
+    assert saved.candidate_capture_enabled
+    assert saved.candidate_audio_device_name == "Candidate Microphone"
+    assert saved.retain_candidate_audio
     assert (saved.overlay_width, saved.overlay_height) == (650, 700)
     assert (saved.overlay_opacity, saved.overlay_font_size) == (75, 20)
 
 
 def test_health_summary_enables_start_only_for_audio_and_installed_model():
     setup = SetupWindow(
-        FakePyAudio([input_device()]),
-        AppSettings(),
+        FakePyAudio([input_device(), input_device("Candidate Microphone")]),
+        AppSettings(candidate_capture_enabled=True),
         auto_check=False,
     )
 
     assert not setup.start_button.isEnabled()
     setup._ollama_checked(ready_ollama())
+    assert not setup.start_button.isEnabled()
+    setup.consent_checkbox.setChecked(True)
 
     assert setup.start_button.isEnabled()
     assert "✓ Audio input selected" in setup.health_summary.text()
     assert "✓ Ollama reachable" in setup.health_summary.text()
     assert "✓ Selected Ollama model installed" in setup.health_summary.text()
+    assert "✓ Separate candidate microphone selected" in setup.health_summary.text()
+    assert "✓ Session consent confirmed" in setup.health_summary.text()
     assert setup.ollama_model_combo.findText("llama3.2:latest") >= 0
 
 
@@ -131,6 +139,48 @@ def test_missing_model_is_visible_and_prevents_start():
     assert not setup.start_button.isEnabled()
     assert "not installed" in setup.ollama_status_label.text()
     assert "ollama pull missing:7b" in setup.ollama_status_label.text()
+
+
+def test_candidate_microphone_is_logically_separate_from_interviewer_input():
+    setup = SetupWindow(
+        FakePyAudio(
+            [
+                input_device("BlackHole 2ch"),
+                input_device("MacBook Microphone"),
+                input_device("USB Microphone"),
+            ]
+        ),
+        AppSettings(),
+        auto_check=False,
+    )
+
+    assert setup.audio_device_combo.currentData() == 0
+    assert setup.candidate_device_combo.currentData() in {1, 2}
+    assert setup.candidate_device_combo.currentData() != setup.audio_device_combo.currentData()
+
+    setup.audio_device_combo.setCurrentIndex(1)
+
+    assert setup.candidate_device_combo.currentData() != setup.audio_device_combo.currentData()
+
+
+def test_consent_is_not_remembered_and_retention_change_requires_reconsent():
+    setup = SetupWindow(
+        FakePyAudio([input_device(), input_device("Candidate Microphone")]),
+        AppSettings(retain_candidate_audio=True),
+        auto_check=False,
+    )
+
+    assert not setup.consent_checkbox.isChecked()
+    assert "retained as local WAV files" in setup.consent_details_label.text()
+    assert not setup.test_audio_button.isEnabled()
+    assert not setup.test_candidate_audio_button.isEnabled()
+    setup.consent_checkbox.setChecked(True)
+    assert setup.test_audio_button.isEnabled()
+    assert setup.test_candidate_audio_button.isEnabled()
+    setup.retain_candidate_audio_checkbox.setChecked(False)
+
+    assert not setup.consent_checkbox.isChecked()
+    assert "discarded after transcription" in setup.consent_details_label.text()
 
 
 def test_audio_capture_test_updates_live_meter_and_success_state():

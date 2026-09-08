@@ -8,6 +8,7 @@ from src.diagnostics import (
     check_ollama,
     list_audio_input_devices,
     preferred_audio_device_index,
+    preferred_candidate_device_index,
 )
 
 
@@ -66,6 +67,33 @@ def test_blackhole_is_only_a_preference_not_a_requirement():
 
     assert preferred_audio_device_index(ordinary) == 3
     assert preferred_audio_device_index(with_blackhole) == 5
+
+
+def test_candidate_microphone_prefers_a_different_physical_input():
+    devices = [
+        AudioInputDevice(2, "BlackHole 2ch", 2, 48000),
+        AudioInputDevice(4, "MacBook Microphone", 1, 48000),
+    ]
+
+    assert preferred_candidate_device_index(devices, interviewer_device_index=2) == 4
+    assert preferred_candidate_device_index(devices, interviewer_device_index=4) == 2
+
+
+def test_candidate_microphone_prefers_system_default_when_available():
+    devices = [
+        AudioInputDevice(1, "Phone Microphone", 1, 48000),
+        AudioInputDevice(2, "BlackHole 2ch", 2, 48000),
+        AudioInputDevice(5, "MacBook Microphone", 1, 48000),
+    ]
+
+    assert (
+        preferred_candidate_device_index(
+            devices,
+            interviewer_device_index=2,
+            default_input_index=5,
+        )
+        == 5
+    )
 
 
 def test_audio_level_meter_maps_silence_and_signal():

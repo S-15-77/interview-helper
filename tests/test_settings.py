@@ -23,6 +23,10 @@ def test_settings_round_trip_all_configurable_values(tmp_path):
         silence_timeout_ms=1400,
         audio_device_index=7,
         audio_device_name="Call Audio",
+        candidate_capture_enabled=True,
+        candidate_audio_device_index=9,
+        candidate_audio_device_name="Candidate Mic",
+        retain_candidate_audio=True,
         overlay_width=620,
         overlay_height=640,
         overlay_opacity=82,
@@ -42,6 +46,9 @@ def test_settings_round_trip_all_configurable_values(tmp_path):
     raw = json.loads(path.read_text())
     assert raw["version"] == SETTINGS_VERSION
     assert raw["audio"]["device_name"] == "Call Audio"
+    assert raw["audio"]["candidate_device_name"] == "Candidate Mic"
+    assert raw["audio"]["retain_candidate_audio"] is True
+    assert "consent" not in json.dumps(raw).casefold()
     assert raw["session"]["logging_enabled"] is False
 
 
@@ -74,3 +81,31 @@ def test_invalid_setting_identifies_the_bad_field(tmp_path):
 
     with pytest.raises(SettingsError, match="audio.vad_aggressiveness"):
         load_settings(path)
+
+
+def test_version_one_settings_are_migrated_with_safe_candidate_defaults(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "ollama": {"model": "legacy-model"},
+                "audio": {"device_index": 2, "device_name": "BlackHole 2ch"},
+            }
+        )
+    )
+
+    settings = load_settings(path)
+
+    assert settings.version == SETTINGS_VERSION
+    assert settings.ollama_model == "legacy-model"
+    assert settings.candidate_capture_enabled
+    assert not settings.retain_candidate_audio
+
+
+def test_same_device_cannot_be_used_for_both_audio_roles():
+    with pytest.raises(SettingsError, match="must use different inputs"):
+        AppSettings(
+            audio_device_index=2,
+            candidate_audio_device_index=2,
+        ).validated()
