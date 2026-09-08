@@ -72,7 +72,6 @@ These are relatively small changes with a large usability benefit.
 ### Definition of done
 
 - The user can control a session without returning to the terminal.
-- The overlay clearly communicates what the application is doing.
 - A slow or incorrect answer can be cancelled without restarting the app.
 
 ## Priority 2: Settings and setup wizard
