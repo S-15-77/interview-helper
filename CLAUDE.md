@@ -53,8 +53,12 @@ Two background threads feed a PyQt6 GUI on the main thread; there is no web serv
    silence is seen. Utterances shorter than `MIN_SPEECH_MS` (300ms) are dropped as noise
    rather than returned — Whisper otherwise "confidently" hallucinates text for short
    noise/comfort-noise blips (e.g. from a muted mic) that VAD mis-flagged as speech.
-2. `app.py`'s `Worker` thread pulls utterances off that queue, converts PCM to float32
-   (`pcm_bytes_to_float32`), and calls `transcriber.transcribe`.
+2. `app.py`'s `Worker` thread pulls utterances from a bounded `WorkQueue`, converts PCM to
+   float32 (`pcm_bytes_to_float32`), and calls `transcriber.transcribe`. Cumulative partials
+   and queued final utterances use latest-wins replacement instead of building a stale
+   backlog. A manual question clears queued audio, cooperatively cancels the active operation,
+   and runs next. Repeated audio transcriptions are suppressed within a short capture-time
+   window; deliberately repeated manual questions are not.
 3. `transcriber.py` lazy-loads a singleton `faster_whisper.WhisperModel("base.en")` and
    transcribes with `vad_filter=True` (faster-whisper's own Silero VAD pass) — same
    hallucination problem as above, second layer of defense. `preload()` is called once at
@@ -66,6 +70,9 @@ Two background threads feed a PyQt6 GUI on the main thread; there is no web serv
    capped with `options.num_predict` so a runaway generation can't add unbounded latency.
 5. The `Worker` forwards each streamed chunk to the overlay and appends the Q/A pair to
    `SessionLogger`, which writes one JSON line per turn to `sessions/<start-timestamp>.jsonl`.
+   Successful entries include transcription, first-token, generation, and total-pipeline
+   timings in milliseconds. Cancelled answers are visibly marked but are not logged or added
+   to conversation context.
 6. `Worker` also maintains a rolling `context` string (`trim_context`, capped at
    `CONTEXT_WORD_LIMIT` words) passed into the next `stream_answer` call for continuity.
 
@@ -96,7 +103,9 @@ window exists, so calling `.show()` on `OverlayWindow` under `QT_QPA_PLATFORM=of
 (e.g. in tests) segfaults. `tests/test_overlay.py` avoids this deliberately by never
 calling `.show()`. The header bar (`_DragHandle`) is a real click-drag window mover; the
 answer label has `TextSelectableByMouse | TextSelectableByKeyboard` so users can select and
-copy the streamed answer.
+copy the streamed answer. A persistent header status shows loading/listening/transcribing/
+generating state and recent latency, while its Cancel button signals the worker to cancel the
+active operation and clear pending work.
 
 **Model choice**: the Ollama model is `llm_client.DEFAULT_MODEL`, not read from a config file
 or env var — both `preload()` and `stream_answer()` default to it, so swapping models is a
