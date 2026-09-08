@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
@@ -79,6 +80,147 @@ def test_cancelled_answer_is_marked_in_history():
     overlay._on_answer_cancelled()
 
     assert "Answer cancelled." in overlay.label.text()
+
+
+def test_pause_button_emits_pause_and_resume_states():
+    overlay = OverlayWindow()
+    states = []
+    overlay.listening_paused_changed.connect(states.append)
+
+    QTest.mouseClick(overlay.pause_button, Qt.MouseButton.LeftButton)
+    assert overlay.pause_button.text() == "Resume"
+
+    QTest.mouseClick(overlay.pause_button, Qt.MouseButton.LeftButton)
+    assert overlay.pause_button.text() == "Pause"
+    assert states == [True, False]
+
+
+def test_answer_action_buttons_emit_requests():
+    overlay = OverlayWindow()
+    requested = []
+    overlay.regenerate_requested.connect(lambda: requested.append("regenerate"))
+    overlay.shorter_answer_requested.connect(lambda: requested.append("shorter"))
+    overlay.more_detail_requested.connect(lambda: requested.append("detail"))
+
+    QTest.mouseClick(overlay.regenerate_answer_button, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(overlay.shorter_button, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(overlay.more_detail_button, Qt.MouseButton.LeftButton)
+
+    assert requested == ["regenerate", "shorter", "detail"]
+
+
+def test_copy_answer_and_session_use_plain_text_clipboard():
+    overlay = OverlayWindow()
+    overlay._on_question_started("Question one?")
+    overlay._on_text_appended("Answer one.")
+    overlay._on_question_started("Question two?")
+    overlay._on_text_appended("Answer two.")
+
+    QTest.mouseClick(overlay.copy_answer_button, Qt.MouseButton.LeftButton)
+    assert QApplication.clipboard().text() == "Answer two."
+
+    QTest.mouseClick(overlay.copy_session_button, Qt.MouseButton.LeftButton)
+    assert QApplication.clipboard().text() == (
+        "Q: Question one?\nA: Answer one.\n\n"
+        "Q: Question two?\nA: Answer two."
+    )
+
+
+def test_clear_history_resets_visible_and_plain_text_history():
+    overlay = OverlayWindow()
+    overlay._on_status_changed("Listening…")
+    overlay._on_question_started("Question?")
+    overlay._on_text_appended("Answer.")
+
+    QTest.mouseClick(overlay.clear_history_button, Qt.MouseButton.LeftButton)
+
+    assert overlay.label.text() == "Listening…"
+    assert not overlay._history_started
+    assert overlay._plain_history_parts == []
+    assert overlay._current_answer_chunks == []
+
+
+def test_view_sliders_adjust_overlay_dimensions_opacity_and_font():
+    overlay = OverlayWindow()
+
+    overlay.width_slider.setValue(620)
+    overlay.height_slider.setValue(640)
+    overlay.opacity_slider.setValue(70)
+    overlay.font_size_slider.setValue(21)
+
+    assert overlay.width() == 620
+    assert overlay.height() == 640
+    assert overlay.windowOpacity() == pytest.approx(0.7, abs=0.01)
+    assert "font-size: 21px" in overlay.label.styleSheet()
+
+
+def test_view_button_toggles_view_settings_panel():
+    overlay = OverlayWindow()
+    assert overlay.view_settings_panel.isHidden()
+
+    QTest.mouseClick(overlay.view_button, Qt.MouseButton.LeftButton)
+
+    assert not overlay.view_settings_panel.isHidden()
+
+
+def test_pause_cancel_and_regenerate_keyboard_shortcuts_emit_actions():
+    overlay = OverlayWindow()
+    actions = []
+    overlay.listening_paused_changed.connect(
+        lambda paused: actions.append("pause" if paused else "resume")
+    )
+    overlay.cancel_requested.connect(lambda: actions.append("cancel"))
+    overlay.regenerate_requested.connect(lambda: actions.append("regenerate"))
+
+    overlay._pause_shortcut.activated.emit()
+    overlay._cancel_shortcut.activated.emit()
+    overlay._regenerate_shortcut.activated.emit()
+
+    assert actions == ["pause", "cancel", "regenerate"]
+
+
+def test_global_visibility_shortcut_matches_only_control_option_i(monkeypatch):
+    monkeypatch.setattr(overlay_module, "_HAS_APPKIT", True)
+    monkeypatch.setattr(overlay_module, "NSEventModifierFlagControl", 1, raising=False)
+    monkeypatch.setattr(overlay_module, "NSEventModifierFlagOption", 2, raising=False)
+
+    assert overlay_module._matches_visibility_shortcut(34, 3)
+    assert not overlay_module._matches_visibility_shortcut(34, 1)
+    assert not overlay_module._matches_visibility_shortcut(35, 3)
+
+
+def test_global_visibility_shortcut_registers_and_unregisters_monitors(monkeypatch):
+    calls = []
+
+    class FakeNSEvent:
+        @staticmethod
+        def addGlobalMonitorForEventsMatchingMask_handler_(mask, handler):
+            calls.append(("global", mask, handler))
+            return "global-token"
+
+        @staticmethod
+        def addLocalMonitorForEventsMatchingMask_handler_(mask, handler):
+            calls.append(("local", mask, handler))
+            return "local-token"
+
+        @staticmethod
+        def removeMonitor_(token):
+            calls.append(("remove", token))
+
+    monkeypatch.setattr(overlay_module, "_HAS_APPKIT", True)
+    monkeypatch.setattr(overlay_module, "NSEvent", FakeNSEvent, raising=False)
+    monkeypatch.setattr(overlay_module, "NSEventMaskKeyDown", 99, raising=False)
+    overlay = OverlayWindow()
+
+    overlay._install_global_visibility_shortcut()
+    overlay.stop_global_visibility_shortcut()
+
+    assert [(kind, value) for kind, value, *_ in calls[:2]] == [
+        ("global", 99),
+        ("local", 99),
+    ]
+    assert ("remove", "global-token") in calls
+    assert ("remove", "local-token") in calls
 
 
 def test_detected_transcript_is_visible_with_confidence():

@@ -2,20 +2,24 @@ import html
 import sys
 
 from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
 try:
+    import AppKit
     import objc
     from AppKit import (
         NSScreenSaverWindowLevel,
@@ -23,9 +27,23 @@ try:
         NSWindowCollectionBehaviorFullScreenAuxiliary,
         NSWindowSharingNone,
     )
+    NSEvent = AppKit.NSEvent
+    NSEventMaskKeyDown = AppKit.NSEventMaskKeyDown
+    NSEventModifierFlagControl = AppKit.NSEventModifierFlagControl
+    NSEventModifierFlagOption = AppKit.NSEventModifierFlagOption
     _HAS_APPKIT = True
-except ImportError:
+except (ImportError, AttributeError):
     _HAS_APPKIT = False
+
+
+VISIBILITY_SHORTCUT_KEY_CODE = 34  # Physical I key on macOS.
+
+
+def _matches_visibility_shortcut(key_code: int, modifier_flags: int) -> bool:
+    if not _HAS_APPKIT:
+        return False
+    required = NSEventModifierFlagControl | NSEventModifierFlagOption
+    return key_code == VISIBILITY_SHORTCUT_KEY_CODE and modifier_flags & required == required
 
 
 class _DragHandle(QWidget):
@@ -56,6 +74,7 @@ class OverlaySignals(QObject):
     answer_cancelled = pyqtSignal()
     transcript_detected = pyqtSignal(str, float, float, bool)
     transcript_cleared = pyqtSignal()
+    visibility_toggle_requested = pyqtSignal()
     error_shown = pyqtSignal(str)
     status_changed = pyqtSignal(str)
 
@@ -66,17 +85,28 @@ class OverlayWindow(QWidget):
     manual_question_submitted = pyqtSignal(str)
     transcript_correction_submitted = pyqtSignal(str)
     retry_transcription_requested = pyqtSignal()
+    listening_paused_changed = pyqtSignal(bool)
+    regenerate_requested = pyqtSignal()
+    shorter_answer_requested = pyqtSignal()
+    more_detail_requested = pyqtSignal()
     profile_changed = pyqtSignal(object)
 
     def __init__(self, application_profiles: list[str] | None = None):
         super().__init__()
         self._history_started = False
+        self._plain_history_parts: list[str] = []
+        self._current_answer_chunks: list[str] = []
+        self._global_key_monitor = None
+        self._local_key_monitor = None
+        self._visibility_fallback_shortcut: QShortcut | None = None
+        self._answer_font_size = 16
         self.signals = OverlaySignals()
         self.signals.question_started.connect(self._on_question_started)
         self.signals.text_appended.connect(self._on_text_appended)
         self.signals.answer_cancelled.connect(self._on_answer_cancelled)
         self.signals.transcript_detected.connect(self._on_transcript_detected)
         self.signals.transcript_cleared.connect(self._on_transcript_cleared)
+        self.signals.visibility_toggle_requested.connect(self._toggle_visibility)
         self.signals.error_shown.connect(self._on_error_shown)
         self.signals.status_changed.connect(self._on_status_changed)
 
@@ -110,10 +140,7 @@ class OverlayWindow(QWidget):
             Qt.TextInteractionFlag.TextSelectableByMouse
             | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
-        self.label.setStyleSheet(
-            "background-color: rgba(20, 20, 20, 200); color: white;"
-            "padding: 14px; font-size: 16px;"
-        )
+        self._apply_answer_style()
 
         self.close_button = QPushButton("×")
         self.close_button.setFixedSize(22, 22)
@@ -243,6 +270,118 @@ class OverlayWindow(QWidget):
         transcript_layout.addLayout(transcript_controls)
         self.transcript_panel.setVisible(False)
 
+        control_button_style = (
+            "QPushButton { background-color: rgba(255, 255, 255, 30); color: white;"
+            "border: 1px solid rgba(255, 255, 255, 38); border-radius: 5px;"
+            "padding: 4px 7px; font-size: 10px; }"
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 60); }"
+            "QPushButton:checked { background-color: #805a2b; }"
+        )
+
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.setCheckable(True)
+        self.pause_button.setToolTip("Pause/resume call-audio capture (Ctrl+Option+P).")
+        self.pause_button.setStyleSheet(control_button_style)
+        self.pause_button.toggled.connect(self._on_pause_toggled)
+
+        self.regenerate_answer_button = QPushButton("Regenerate")
+        self.regenerate_answer_button.setToolTip(
+            "Generate the last answer again (Ctrl+Option+R)."
+        )
+        self.regenerate_answer_button.setStyleSheet(control_button_style)
+        self.regenerate_answer_button.clicked.connect(self.regenerate_requested.emit)
+
+        self.shorter_button = QPushButton("Shorter")
+        self.shorter_button.setStyleSheet(control_button_style)
+        self.shorter_button.clicked.connect(self.shorter_answer_requested.emit)
+
+        self.more_detail_button = QPushButton("More Detail")
+        self.more_detail_button.setStyleSheet(control_button_style)
+        self.more_detail_button.clicked.connect(self.more_detail_requested.emit)
+
+        self.clear_history_button = QPushButton("Clear")
+        self.clear_history_button.setStyleSheet(control_button_style)
+        self.clear_history_button.clicked.connect(self._clear_history)
+
+        self.copy_answer_button = QPushButton("Copy Answer")
+        self.copy_answer_button.setStyleSheet(control_button_style)
+        self.copy_answer_button.clicked.connect(self._copy_answer)
+
+        self.copy_session_button = QPushButton("Copy Session")
+        self.copy_session_button.setStyleSheet(control_button_style)
+        self.copy_session_button.clicked.connect(self._copy_session)
+
+        self.view_button = QPushButton("View")
+        self.view_button.setCheckable(True)
+        self.view_button.setStyleSheet(control_button_style)
+        self.view_button.clicked.connect(self._toggle_view_settings)
+
+        self.controls_panel = QWidget()
+        self.controls_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.controls_panel.setStyleSheet("background-color: rgba(20, 20, 20, 220);")
+        controls_layout = QVBoxLayout(self.controls_panel)
+        controls_layout.setContentsMargins(6, 4, 6, 5)
+        controls_layout.setSpacing(3)
+        primary_controls = QHBoxLayout()
+        primary_controls.setContentsMargins(0, 0, 0, 0)
+        primary_controls.setSpacing(4)
+        primary_controls.addWidget(self.pause_button)
+        primary_controls.addWidget(self.regenerate_answer_button)
+        primary_controls.addWidget(self.shorter_button)
+        primary_controls.addWidget(self.more_detail_button)
+        primary_controls.addWidget(self.clear_history_button)
+        secondary_controls = QHBoxLayout()
+        secondary_controls.setContentsMargins(0, 0, 0, 0)
+        secondary_controls.setSpacing(4)
+        secondary_controls.addWidget(self.copy_answer_button)
+        secondary_controls.addWidget(self.copy_session_button)
+        secondary_controls.addWidget(self.view_button)
+        secondary_controls.addStretch()
+        shortcut_hint = QLabel("Show/hide: Ctrl+Option+I")
+        shortcut_hint.setStyleSheet(
+            "color: rgba(255, 255, 255, 110); font-size: 9px;"
+        )
+        secondary_controls.addWidget(shortcut_hint)
+        controls_layout.addLayout(primary_controls)
+        controls_layout.addLayout(secondary_controls)
+
+        self.width_slider = self._view_slider(360, 800, 480)
+        self.height_slider = self._view_slider(300, 900, 500)
+        self.opacity_slider = self._view_slider(35, 100, 100)
+        self.font_size_slider = self._view_slider(12, 28, 16)
+        self.width_slider.valueChanged.connect(self.setFixedWidth)
+        self.height_slider.valueChanged.connect(self.setFixedHeight)
+        self.opacity_slider.valueChanged.connect(
+            lambda value: self.setWindowOpacity(value / 100)
+        )
+        self.font_size_slider.valueChanged.connect(self._set_answer_font_size)
+
+        self.view_settings_panel = QWidget()
+        self.view_settings_panel.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground,
+            True,
+        )
+        self.view_settings_panel.setStyleSheet(
+            "background-color: rgba(24, 24, 24, 230); color: white;"
+        )
+        view_layout = QGridLayout(self.view_settings_panel)
+        view_layout.setContentsMargins(8, 5, 8, 7)
+        view_layout.setHorizontalSpacing(7)
+        view_layout.setVerticalSpacing(3)
+        for row, (name, slider) in enumerate(
+            (
+                ("Width", self.width_slider),
+                ("Height", self.height_slider),
+                ("Opacity", self.opacity_slider),
+                ("Font", self.font_size_slider),
+            )
+        ):
+            label = QLabel(name)
+            label.setStyleSheet("color: rgba(255, 255, 255, 165); font-size: 10px;")
+            view_layout.addWidget(label, row, 0)
+            view_layout.addWidget(slider, row, 1)
+        self.view_settings_panel.setVisible(False)
+
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.label)
         self.scroll.setWidgetResizable(True)
@@ -288,6 +427,8 @@ class OverlayWindow(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self.header)
         layout.addWidget(self.transcript_panel)
+        layout.addWidget(self.controls_panel)
+        layout.addWidget(self.view_settings_panel)
         layout.addWidget(self.scroll)
         layout.addWidget(self.input_panel)
         self.setLayout(layout)
@@ -296,13 +437,58 @@ class OverlayWindow(QWidget):
         screen = QApplication.primaryScreen()
         geometry = screen.availableGeometry() if screen else None
         available_height = geometry.height() if geometry else 900
-        self.setFixedHeight(min(500, available_height - 120))
+        initial_height = min(500, available_height - 120)
+        self.setFixedHeight(initial_height)
+        self.height_slider.setValue(initial_height)
         # Top-center, near the built-in webcam — easier to glance at than a
         # corner position, and can still be dragged anywhere via the header.
         if geometry:
             self.move(geometry.x() + (geometry.width() - self.width()) // 2, geometry.y() + 20)
         else:
             self.move(60, 60)
+        self._setup_keyboard_shortcuts()
+
+    @staticmethod
+    def _view_slider(minimum: int, maximum: int, value: int) -> QSlider:
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(minimum, maximum)
+        slider.setValue(value)
+        return slider
+
+    def _apply_answer_style(self):
+        self.label.setStyleSheet(
+            "background-color: rgba(20, 20, 20, 200); color: white;"
+            f"padding: 14px; font-size: {self._answer_font_size}px;"
+        )
+
+    def _set_answer_font_size(self, value: int):
+        self._answer_font_size = value
+        self._apply_answer_style()
+
+    def _setup_keyboard_shortcuts(self):
+        self._pause_shortcut = QShortcut(QKeySequence("Ctrl+Alt+P"), self)
+        self._pause_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._pause_shortcut.activated.connect(self.pause_button.toggle)
+
+        self._cancel_shortcut = QShortcut(QKeySequence("Escape"), self)
+        self._cancel_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._cancel_shortcut.activated.connect(self.cancel_requested.emit)
+
+        self._regenerate_shortcut = QShortcut(QKeySequence("Ctrl+Alt+R"), self)
+        self._regenerate_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._regenerate_shortcut.activated.connect(self.regenerate_requested.emit)
+
+        if not _HAS_APPKIT:
+            self._visibility_fallback_shortcut = QShortcut(
+                QKeySequence("Ctrl+Alt+I"),
+                self,
+            )
+            self._visibility_fallback_shortcut.setContext(
+                Qt.ShortcutContext.ApplicationShortcut
+            )
+            self._visibility_fallback_shortcut.activated.connect(
+                self.signals.visibility_toggle_requested.emit
+            )
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -312,6 +498,62 @@ class OverlayWindow(QWidget):
         # with a real screen recording (Task 7 Step 2), not just by reading
         # this code.
         self._configure_native_window()
+        self._install_global_visibility_shortcut()
+
+    def _install_global_visibility_shortcut(self):
+        if not _HAS_APPKIT or self._global_key_monitor is not None:
+            return
+
+        def handle_global_key(event):
+            if _matches_visibility_shortcut(
+                int(event.keyCode()),
+                int(event.modifierFlags()),
+            ):
+                self.signals.visibility_toggle_requested.emit()
+
+        def handle_local_key(event):
+            if _matches_visibility_shortcut(
+                int(event.keyCode()),
+                int(event.modifierFlags()),
+            ):
+                self.signals.visibility_toggle_requested.emit()
+                return None
+            return event
+
+        try:
+            self._global_key_monitor = (
+                NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+                    NSEventMaskKeyDown,
+                    handle_global_key,
+                )
+            )
+            self._local_key_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+                NSEventMaskKeyDown,
+                handle_local_key,
+            )
+            self._global_key_handler = handle_global_key
+            self._local_key_handler = handle_local_key
+        except Exception as exc:
+            print(
+                f"WARNING: global visibility shortcut unavailable: {exc}",
+                file=sys.stderr,
+            )
+
+    def stop_global_visibility_shortcut(self):
+        if not _HAS_APPKIT:
+            return
+        for monitor in (self._global_key_monitor, self._local_key_monitor):
+            if monitor is not None:
+                NSEvent.removeMonitor_(monitor)
+        self._global_key_monitor = None
+        self._local_key_monitor = None
+
+    def _toggle_visibility(self):
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
+            self.raise_()
 
     def _configure_native_window(self):
         if not _HAS_APPKIT:
@@ -345,9 +587,12 @@ class OverlayWindow(QWidget):
 
     def _on_question_started(self, question: str):
         prefix = "" if not self._history_started else "<br><br>"
+        plain_prefix = "" if not self._history_started else "\n\n"
         if not self._history_started:
             self.label.setText("")
             self._history_started = True
+        self._plain_history_parts.append(f"{plain_prefix}Q: {question}\nA: ")
+        self._current_answer_chunks = []
         q_html = html.escape(question)
         self.label.setText(
             self.label.text() + f'{prefix}<span style="color:{self._LABEL_COLOR}; '
@@ -360,6 +605,8 @@ class OverlayWindow(QWidget):
 
     def _on_text_appended(self, chunk: str):
         follow = self._is_at_bottom()
+        self._plain_history_parts.append(chunk)
+        self._current_answer_chunks.append(chunk)
         escaped = html.escape(chunk).replace("\n", "<br>")
         self.label.setText(self.label.text() + escaped)
         if follow:
@@ -367,6 +614,9 @@ class OverlayWindow(QWidget):
 
     def _on_answer_cancelled(self):
         follow = self._is_at_bottom()
+        cancellation = "\n[Answer cancelled.]"
+        self._plain_history_parts.append(cancellation)
+        self._current_answer_chunks.append(cancellation)
         self.label.setText(
             self.label.text()
             + '<br><span style="color:rgba(255,255,255,140);"><i>Answer cancelled.</i></span>'
@@ -399,6 +649,9 @@ class OverlayWindow(QWidget):
 
     def _on_error_shown(self, message: str):
         follow = self._is_at_bottom()
+        error_text = f"\n[Error: {message}]"
+        self._plain_history_parts.append(error_text)
+        self._current_answer_chunks.append(error_text)
         escaped = html.escape(message)
         self.label.setText(
             self.label.text() + f'<br><span style="color:{self._ERROR_COLOR};">⚠ {escaped}</span>'
@@ -408,21 +661,43 @@ class OverlayWindow(QWidget):
 
     def _on_status_changed(self, message: str):
         self.status_label.setText(message)
-        self.cancel_button.setEnabled(
-            message.startswith(
-                (
-                    "Transcribing",
-                    "Retrying transcription",
-                    "Generating",
-                    "Manual question queued",
-                    "Corrected question queued",
-                    "Cancelling",
-                )
+        busy = message.startswith(
+            (
+                "Transcribing",
+                "Retrying transcription",
+                "Generating",
+                "Manual question queued",
+                "Corrected question queued",
+                "Regenerating",
+                "Generating shorter",
+                "Generating detailed",
+                "Cancelling",
             )
         )
+        self.cancel_button.setEnabled(busy)
+        self.clear_history_button.setEnabled(not busy)
         # Startup/listening statuses should not erase an active Q&A history.
         if not self._history_started:
             self.label.setText(html.escape(message))
+
+    def _on_pause_toggled(self, paused: bool):
+        self.pause_button.setText("Resume" if paused else "Pause")
+        self.listening_paused_changed.emit(paused)
+
+    def _toggle_view_settings(self, visible: bool):
+        self.view_settings_panel.setVisible(visible)
+
+    def _clear_history(self):
+        self._history_started = False
+        self._plain_history_parts.clear()
+        self._current_answer_chunks.clear()
+        self.label.setText(html.escape(self.status_label.text()))
+
+    def _copy_answer(self):
+        QApplication.clipboard().setText("".join(self._current_answer_chunks).strip())
+
+    def _copy_session(self):
+        QApplication.clipboard().setText("".join(self._plain_history_parts).strip())
 
     def _submit_manual_question(self):
         question = self.question_input.text().strip()
