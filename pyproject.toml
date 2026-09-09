@@ -1,0 +1,25 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = ["venv", "my_data", "sessions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+check_untyped_defs = true
+warn_unused_ignores = true
+no_implicit_optional = true
+ignore_missing_imports = true
+explicit_package_bases = true
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+  "integration: cross-component tests without external services",
+  "hardware: tests requiring a real audio input device",
+  "ollama: tests requiring a running Ollama service",
+]

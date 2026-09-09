@@ -144,37 +144,37 @@ helps users improve rather than only supplying an answer.
 
 Show the coached answer immediately, matching the application's current behavior.
 
-- [ ] Stream a concise answer into the overlay.
-- [ ] Provide Shorter, More Detail, and Regenerate actions.
+- [x] Stream a concise answer into the overlay.
+- [x] Provide Shorter, More Detail, and Regenerate actions.
 
 ### Simulate mode
 
 Create realistic practice without showing an answer before the candidate responds.
 
-- [ ] Hide the coached answer while the candidate is speaking.
-- [ ] Show only the question and timer during the attempt.
-- [ ] Reveal feedback and an example answer afterward.
-- [ ] Allow retrying the question.
+- [x] Hide the coached answer while the candidate is speaking.
+- [x] Show only the question and timer during the attempt.
+- [x] Reveal feedback and an example answer afterward.
+- [x] Allow retrying the question.
 
 ### Review mode
 
-- [ ] Browse completed sessions and individual attempts.
-- [ ] Compare original and improved answers.
-- [ ] Add personal notes and mark questions for future practice.
+- [x] Browse completed sessions and individual attempts.
+- [x] Compare original and improved answers.
+- [x] Add personal notes and mark questions for future practice.
 
 ## Priority 5: Job-specific mock interviews
 
 Use the selected application profile to create a structured interview rather than handling
 only ad hoc questions.
 
-- [ ] Generate questions from the résumé and job description.
-- [ ] Let the user choose interview length and difficulty.
-- [ ] Support recruiter, behavioral, technical, coding, and system-design rounds.
-- [ ] Generate realistic follow-up questions based on the candidate's previous response.
-- [ ] Avoid repeating questions or STAR stories within a session.
-- [ ] Add a timed full-interview mode.
-- [ ] Let users maintain a reusable question bank.
-- [ ] Allow questions to be tagged by topic, difficulty, and status.
+- [x] Generate questions from the résumé and job description.
+- [x] Let the user choose interview length and difficulty.
+- [x] Support recruiter, behavioral, technical, coding, and system-design rounds.
+- [x] Generate realistic follow-up questions based on the candidate's previous response.
+- [x] Avoid repeating questions or STAR stories within a session.
+- [x] Add a timed full-interview mode.
+- [x] Let users maintain a reusable question bank.
+- [x] Allow questions to be tagged by topic, difficulty, and status.
 
 ### Suggested interview flow
 
@@ -190,16 +190,16 @@ only ad hoc questions.
 The application already writes session data to JSONL. Build a useful interface on top of
 that data.
 
-- [ ] List previous sessions by date and application profile.
-- [ ] Show questions, generated answers, candidate responses, and feedback.
-- [ ] Filter by question category and difficulty.
-- [ ] Track recurring weaknesses.
-- [ ] Track scores and improvement over time.
-- [ ] Surface STAR stories that are overused or underdeveloped.
-- [ ] Generate a concise end-of-session summary.
-- [ ] Recommend the next topics or questions to practice.
-- [ ] Export a session to Markdown or PDF.
-- [ ] Add delete, retention-period, and auto-cleanup controls.
+- [x] List previous sessions by date and application profile.
+- [x] Show questions, generated answers, candidate responses, and feedback.
+- [x] Filter by question category and difficulty.
+- [x] Track recurring weaknesses.
+- [x] Track scores and improvement over time.
+- [x] Surface STAR stories that are overused or underdeveloped.
+- [x] Generate a concise end-of-session summary.
+- [x] Recommend the next topics or questions to practice.
+- [x] Export a session to Markdown or PDF.
+- [x] Add delete, retention-period, and auto-cleanup controls.
 
 ### Useful metrics
 
@@ -217,38 +217,42 @@ that data.
 Currently, all skill files and all files in the selected profile are injected into every
 request. This can consume context and weaken instruction-following on smaller local models.
 
-- [ ] Classify the question before building the final prompt.
-- [ ] Load only relevant skill modules for the detected question type.
-- [ ] Select the most relevant résumé, job-description, and STAR-story passages.
-- [ ] Introduce an explicit prompt-size budget.
-- [ ] Replace the last-200-words strategy with structured conversation state.
-- [ ] Track topics discussed, stories already used, and open follow-ups.
-- [ ] Cache unchanged profile files while still detecting edits.
-- [ ] Add prompt-inspection tooling for development and troubleshooting.
+- [x] Classify the question before building the final prompt.
+- [x] Load only relevant skill modules for the detected question type.
+- [x] Select the most relevant résumé, job-description, and STAR-story passages.
+- [x] Introduce an explicit prompt-size budget.
+- [x] Replace the last-200-words strategy with structured conversation state.
+- [x] Track topics discussed, stories already used, and open follow-ups.
+- [x] Cache unchanged profile files while still detecting edits.
+- [x] Add prompt-inspection tooling for development and troubleshooting.
 
 ## Priority 8: Privacy and data controls
 
-- [ ] Let users disable session logging.
-- [ ] Let users choose whether candidate audio is retained.
-- [ ] Default to deleting raw audio after transcription.
-- [ ] Add configurable automatic session deletion.
-- [ ] Add a Delete All Practice Data action with an explicit confirmation.
-- [ ] Redact common personal identifiers from exported reports when requested.
-- [ ] Document exactly what is stored and where.
-- [ ] Clearly label any future feature that stops being fully local.
+- [x] Let users disable session logging.
+- [x] Let users choose whether candidate audio is retained.
+- [x] Default to deleting raw audio after transcription.
+- [x] Add configurable automatic session deletion.
+- [x] Add a Delete All Practice Data action with an explicit confirmation.
+- [x] Redact common personal identifiers from exported reports when requested.
+- [x] Document exactly what is stored and where.
+- [x] Clearly label any future feature that stops being fully local.
 
 ## Priority 9: Distribution and engineering quality
 
 - [ ] Package the project as a signed macOS application.
-- [ ] Provide a first-run setup flow inside the application.
-- [ ] Add CI that runs the unit tests on every pull request.
-- [ ] Configure a formatter and linter.
-- [ ] Add type checking for thread, queue, and signal boundaries.
-- [ ] Separate unit tests from tests requiring real audio hardware or Ollama.
-- [ ] Add integration tests for cancellation, queue pressure, and shutdown.
-- [ ] Add a versioned session-data schema and migrations.
-- [ ] Add structured application logs with a troubleshooting export.
+- [x] Provide a first-run setup flow inside the application.
+- [x] Add CI that runs the unit tests on every pull request.
+- [x] Configure a formatter and linter.
+- [x] Add type checking for thread, queue, and signal boundaries.
+- [x] Separate unit tests from tests requiring real audio hardware or Ollama.
+- [x] Add integration tests for cancellation, queue pressure, and shutdown.
+- [x] Add a versioned session-data schema and migrations.
+- [x] Add structured application logs with a troubleshooting export.
 - [ ] Add a `LICENSE` before opening the repository for reuse or contribution.
+
+The macOS build/sign script is present, but the signing checklist remains open until a Developer
+ID identity is supplied and a signed/notarized artifact is verified. The license remains open
+because selecting legal terms requires the repository owner's decision.
 
 ## Recommended implementation sequence
 

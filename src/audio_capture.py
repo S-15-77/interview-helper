@@ -45,12 +45,12 @@ class UtteranceSegmenter:
         if is_speech:
             self._speech_frames.append(frame_bytes)
             self._trailing_silence = 0
-            
+
             # Emit a partial chunk every `partial_ms` of continuous speech
             if len(self._speech_frames) - self._last_partial_count >= self._partial_frames:
                 self._last_partial_count = len(self._speech_frames)
                 return (b"".join(self._speech_frames), False)
-                
+
             return None
 
         if not self._speech_frames:
@@ -63,7 +63,7 @@ class UtteranceSegmenter:
         frames, self._speech_frames = self._speech_frames, []
         self._trailing_silence = 0
         self._last_partial_count = 0
-        
+
         if len(frames) < MIN_SPEECH_FRAMES:
             return None
         return (b"".join(frames), True)

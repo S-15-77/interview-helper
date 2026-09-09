@@ -1,7 +1,7 @@
 import html
 import sys
 
-from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.coaching import CandidateAttempt
 from src.settings import AppSettings
 
 try:
@@ -30,6 +31,7 @@ try:
         NSWindowCollectionBehaviorFullScreenAuxiliary,
         NSWindowSharingNone,
     )
+
     NSEvent = AppKit.NSEvent
     NSEventMaskKeyDown = AppKit.NSEventMaskKeyDown
     NSEventModifierFlagControl = AppKit.NSEventModifierFlagControl
@@ -58,12 +60,16 @@ class _DragHandle(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_offset = event.globalPosition().toPoint() - self.window().pos()
+            window = self.window()
+            if window is not None:
+                self._drag_offset = event.globalPosition().toPoint() - window.pos()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self.window().move(event.globalPosition().toPoint() - self._drag_offset)
+            window = self.window()
+            if window is not None:
+                window.move(event.globalPosition().toPoint() - self._drag_offset)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -83,6 +89,8 @@ class OverlaySignals(QObject):
     candidate_state_changed = pyqtSignal(str)
     candidate_transcript_detected = pyqtSignal(str, float, float)
     candidate_attempt_ready = pyqtSignal(object)
+    simulation_started = pyqtSignal(str)
+    mock_progress_changed = pyqtSignal(str, bool)
 
 
 class OverlayWindow(QWidget):
@@ -97,6 +105,9 @@ class OverlayWindow(QWidget):
     more_detail_requested = pyqtSignal()
     profile_changed = pyqtSignal(object)
     retry_candidate_answer_requested = pyqtSignal()
+    review_requested = pyqtSignal()
+    mock_interview_requested = pyqtSignal()
+    next_question_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -112,6 +123,14 @@ class OverlayWindow(QWidget):
         self._local_key_monitor = None
         self._visibility_fallback_shortcut: QShortcut | None = None
         self._answer_font_size = settings.overlay_font_size
+        self.practice_mode = settings.practice_mode
+        self._simulation_question = ""
+        self._simulation_elapsed = 0
+        self._simulation_timer = QTimer(self)
+        self._simulation_timer.timeout.connect(self._tick_simulation)
+        self._mock_elapsed = 0
+        self._mock_timer = QTimer(self)
+        self._mock_timer.timeout.connect(self._tick_mock_timer)
         self.signals = OverlaySignals()
         self.signals.question_started.connect(self._on_question_started)
         self.signals.text_appended.connect(self._on_text_appended)
@@ -122,11 +141,11 @@ class OverlayWindow(QWidget):
         self.signals.error_shown.connect(self._on_error_shown)
         self.signals.status_changed.connect(self._on_status_changed)
         self.signals.candidate_state_changed.connect(self._on_candidate_state_changed)
-        self.signals.candidate_transcript_detected.connect(
-            self._on_candidate_transcript_detected
-        )
+        self.signals.candidate_transcript_detected.connect(self._on_candidate_transcript_detected)
         self.signals.candidate_attempt_ready.connect(self._on_candidate_attempt_ready)
-        self._candidate_attempts = []
+        self.signals.simulation_started.connect(self._on_simulation_started)
+        self.signals.mock_progress_changed.connect(self._on_mock_progress_changed)
+        self._candidate_attempts: list[CandidateAttempt] = []
 
         # ponytail: no Qt.WindowType.Tool here on purpose — Qt maps Tool to a
         # native NSPanel (QNSPanel) and keeps re-asserting its own "tool
@@ -136,10 +155,7 @@ class OverlayWindow(QWidget):
         # plain frameless window (QNSWindow) doesn't get that special-cased
         # treatment, so our native overrides in _configure_native_window
         # actually stick.
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         # Note: no longer WA_TransparentForMouseEvents — the user asked to
         # be able to scroll the history, which needs the overlay to accept
@@ -171,9 +187,7 @@ class OverlayWindow(QWidget):
         self.close_button.clicked.connect(self.quit_requested.emit)
 
         self.profile_label = QLabel("Profile")
-        self.profile_label.setStyleSheet(
-            "color: rgba(255, 255, 255, 180); font-size: 12px;"
-        )
+        self.profile_label.setStyleSheet("color: rgba(255, 255, 255, 180); font-size: 12px;")
 
         self.profile_combo = QComboBox()
         self.profile_combo.setToolTip(
@@ -190,16 +204,12 @@ class OverlayWindow(QWidget):
         )
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         if settings.default_application_profile:
-            profile_index = self.profile_combo.findData(
-                settings.default_application_profile
-            )
+            profile_index = self.profile_combo.findData(settings.default_application_profile)
             if profile_index >= 0:
                 self.profile_combo.setCurrentIndex(profile_index)
 
         self.status_label = QLabel("Starting…")
-        self.status_label.setStyleSheet(
-            "color: rgba(255, 255, 255, 165); font-size: 11px;"
-        )
+        self.status_label.setStyleSheet("color: rgba(255, 255, 255, 165); font-size: 11px;")
 
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
@@ -235,9 +245,7 @@ class OverlayWindow(QWidget):
         header_layout.addWidget(self.close_button)
 
         self.transcript_label = QLabel("Detected question")
-        self.transcript_label.setStyleSheet(
-            "color: rgba(255, 255, 255, 175); font-size: 11px;"
-        )
+        self.transcript_label.setStyleSheet("color: rgba(255, 255, 255, 175); font-size: 11px;")
 
         self.transcript_input = QLineEdit()
         self.transcript_input.setPlaceholderText("No clear speech detected — type the question…")
@@ -272,15 +280,11 @@ class OverlayWindow(QWidget):
             "padding: 5px 8px; font-size: 11px; }"
             "QPushButton:hover { background-color: rgba(255, 255, 255, 65); }"
         )
-        self.retry_transcription_button.clicked.connect(
-            self.retry_transcription_requested.emit
-        )
+        self.retry_transcription_button.clicked.connect(self.retry_transcription_requested.emit)
 
         self.transcript_panel = QWidget()
         self.transcript_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.transcript_panel.setStyleSheet(
-            "background-color: rgba(28, 38, 52, 225);"
-        )
+        self.transcript_panel.setStyleSheet("background-color: rgba(28, 38, 52, 225);")
         transcript_layout = QVBoxLayout(self.transcript_panel)
         transcript_layout.setContentsMargins(8, 6, 8, 7)
         transcript_layout.setSpacing(4)
@@ -309,9 +313,7 @@ class OverlayWindow(QWidget):
         self.pause_button.toggled.connect(self._on_pause_toggled)
 
         self.regenerate_answer_button = QPushButton("Regenerate")
-        self.regenerate_answer_button.setToolTip(
-            "Generate the last answer again (Ctrl+Option+R)."
-        )
+        self.regenerate_answer_button.setToolTip("Generate the last answer again (Ctrl+Option+R).")
         self.regenerate_answer_button.setStyleSheet(control_button_style)
         self.regenerate_answer_button.clicked.connect(self.regenerate_requested.emit)
 
@@ -340,6 +342,20 @@ class OverlayWindow(QWidget):
         self.view_button.setStyleSheet(control_button_style)
         self.view_button.clicked.connect(self._toggle_view_settings)
 
+        self.mock_button = QPushButton("Start Mock")
+        self.mock_button.setStyleSheet(control_button_style)
+        self.mock_button.setToolTip("Generate a structured interview from the selected profile.")
+        self.mock_button.clicked.connect(self.mock_interview_requested.emit)
+
+        self.review_button = QPushButton("Review")
+        self.review_button.setStyleSheet(control_button_style)
+        self.review_button.clicked.connect(self.review_requested.emit)
+
+        self.next_button = QPushButton("Next")
+        self.next_button.setStyleSheet(control_button_style)
+        self.next_button.setEnabled(False)
+        self.next_button.clicked.connect(self.next_question_requested.emit)
+
         self.controls_panel = QWidget()
         self.controls_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.controls_panel.setStyleSheet("background-color: rgba(20, 20, 20, 220);")
@@ -362,12 +378,18 @@ class OverlayWindow(QWidget):
         secondary_controls.addWidget(self.view_button)
         secondary_controls.addStretch()
         shortcut_hint = QLabel("Show/hide: Ctrl+Option+I")
-        shortcut_hint.setStyleSheet(
-            "color: rgba(255, 255, 255, 110); font-size: 9px;"
-        )
+        shortcut_hint.setStyleSheet("color: rgba(255, 255, 255, 110); font-size: 9px;")
         secondary_controls.addWidget(shortcut_hint)
+        session_controls = QHBoxLayout()
+        session_controls.setContentsMargins(0, 0, 0, 0)
+        session_controls.setSpacing(4)
+        session_controls.addWidget(self.mock_button)
+        session_controls.addWidget(self.next_button)
+        session_controls.addWidget(self.review_button)
+        session_controls.addStretch()
         controls_layout.addLayout(primary_controls)
         controls_layout.addLayout(secondary_controls)
+        controls_layout.addLayout(session_controls)
 
         self.candidate_state_label = QLabel("Candidate mic: waiting for a question.")
         self.candidate_state_label.setStyleSheet(
@@ -376,6 +398,10 @@ class OverlayWindow(QWidget):
         self.candidate_state_label.setWordWrap(True)
         self.candidate_state_label.setVisible(settings.candidate_capture_enabled)
         controls_layout.addWidget(self.candidate_state_label)
+        self.mock_timer_label = QLabel("")
+        self.mock_timer_label.setStyleSheet("color: rgba(255, 220, 150, 190); font-size: 10px;")
+        self.mock_timer_label.setVisible(False)
+        controls_layout.addWidget(self.mock_timer_label)
 
         self.width_slider = self._view_slider(360, 800, settings.overlay_width)
         self.height_slider = self._view_slider(300, 900, settings.overlay_height)
@@ -387,9 +413,7 @@ class OverlayWindow(QWidget):
         )
         self.width_slider.valueChanged.connect(self.setFixedWidth)
         self.height_slider.valueChanged.connect(self.setFixedHeight)
-        self.opacity_slider.valueChanged.connect(
-            lambda value: self.setWindowOpacity(value / 100)
-        )
+        self.opacity_slider.valueChanged.connect(lambda value: self.setWindowOpacity(value / 100))
         self.font_size_slider.valueChanged.connect(self._set_answer_font_size)
 
         self.view_settings_panel = QWidget()
@@ -431,19 +455,13 @@ class OverlayWindow(QWidget):
         candidate_layout.setSpacing(4)
         candidate_header = QHBoxLayout()
         candidate_title = QLabel("Your practice response")
-        candidate_title.setStyleSheet(
-            "color: #8bd49c; font-size: 11px; font-weight: 600;"
-        )
+        candidate_title.setStyleSheet("color: #8bd49c; font-size: 11px; font-weight: 600;")
         self.candidate_attempt_combo = QComboBox()
         self.candidate_attempt_combo.setMinimumWidth(150)
-        self.candidate_attempt_combo.currentIndexChanged.connect(
-            self._render_candidate_attempt
-        )
+        self.candidate_attempt_combo.currentIndexChanged.connect(self._render_candidate_attempt)
         self.retry_candidate_button = QPushButton("Try Again")
         self.retry_candidate_button.setStyleSheet(control_button_style)
-        self.retry_candidate_button.clicked.connect(
-            self.retry_candidate_answer_requested.emit
-        )
+        self.retry_candidate_button.clicked.connect(self._retry_candidate_answer)
         candidate_header.addWidget(candidate_title)
         candidate_header.addStretch()
         candidate_header.addWidget(self.candidate_attempt_combo)
@@ -470,14 +488,12 @@ class OverlayWindow(QWidget):
         candidate_layout.addWidget(self.candidate_feedback_view)
         self.candidate_feedback_panel.setVisible(False)
 
-        self.scroll = QScrollArea()
-        self.scroll.setWidget(self.label)
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setStyleSheet(
-            "background: transparent;"
-        )
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidget(self.label)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setStyleSheet("background: transparent;")
 
         self.question_input = QLineEdit()
         self.question_input.setPlaceholderText("Paste or type a question shown on screen…")
@@ -518,7 +534,7 @@ class OverlayWindow(QWidget):
         layout.addWidget(self.controls_panel)
         layout.addWidget(self.view_settings_panel)
         layout.addWidget(self.candidate_feedback_panel)
-        layout.addWidget(self.scroll)
+        layout.addWidget(self.scroll_area)
         layout.addWidget(self.input_panel)
         self.setLayout(layout)
 
@@ -573,9 +589,7 @@ class OverlayWindow(QWidget):
                 QKeySequence("Ctrl+Alt+I"),
                 self,
             )
-            self._visibility_fallback_shortcut.setContext(
-                Qt.ShortcutContext.ApplicationShortcut
-            )
+            self._visibility_fallback_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
             self._visibility_fallback_shortcut.activated.connect(
                 self.signals.visibility_toggle_requested.emit
             )
@@ -611,11 +625,9 @@ class OverlayWindow(QWidget):
             return event
 
         try:
-            self._global_key_monitor = (
-                NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
-                    NSEventMaskKeyDown,
-                    handle_global_key,
-                )
+            self._global_key_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+                NSEventMaskKeyDown,
+                handle_global_key,
             )
             self._local_key_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
                 NSEventMaskKeyDown,
@@ -793,20 +805,67 @@ class OverlayWindow(QWidget):
         return "—" if value is None else f"{value}/5"
 
     def _on_candidate_attempt_ready(self, attempt):
+        self._simulation_timer.stop()
         self._candidate_attempts.append(attempt)
         self.candidate_attempt_combo.blockSignals(True)
         question_label = attempt.question.strip().replace("\n", " ")
         if len(question_label) > 22:
             question_label = question_label[:21] + "…"
-        self.candidate_attempt_combo.addItem(
-            f"{question_label} · #{attempt.attempt_number}"
-        )
-        self.candidate_attempt_combo.setCurrentIndex(
-            self.candidate_attempt_combo.count() - 1
-        )
+        self.candidate_attempt_combo.addItem(f"{question_label} · #{attempt.attempt_number}")
+        self.candidate_attempt_combo.setCurrentIndex(self.candidate_attempt_combo.count() - 1)
         self.candidate_attempt_combo.blockSignals(False)
         self._render_candidate_attempt(len(self._candidate_attempts) - 1)
         self.candidate_feedback_panel.setVisible(True)
+        self._set_answer_actions_enabled(self.practice_mode != "simulate")
+
+    def _on_simulation_started(self, question: str):
+        self._simulation_question = question
+        self._simulation_elapsed = 0
+        self._simulation_timer.start(1000)
+        self.candidate_feedback_panel.setVisible(False)
+        self.transcript_panel.setVisible(False)
+        self._set_answer_actions_enabled(False)
+        self._history_started = True
+        self._plain_history_parts.append(f"\n\nQ: {question}\nYour response: ")
+        self._current_answer_chunks = []
+        self.label.setText(
+            f'<span style="color:{self._LABEL_COLOR}; font-weight:600;">Q:</span> '
+            f'{html.escape(question)}<br><br><span style="font-size:24px;">Your turn · 0:00</span>'
+        )
+
+    def _tick_simulation(self):
+        self._simulation_elapsed += 1
+        minutes, seconds = divmod(self._simulation_elapsed, 60)
+        self.label.setText(
+            f'<span style="color:{self._LABEL_COLOR}; font-weight:600;">Q:</span> '
+            f"{html.escape(self._simulation_question)}<br><br>"
+            f'<span style="font-size:24px;">Your turn · {minutes}:{seconds:02d}</span>'
+        )
+
+    def _set_answer_actions_enabled(self, enabled: bool):
+        self.regenerate_answer_button.setEnabled(enabled)
+        self.shorter_button.setEnabled(enabled)
+        self.more_detail_button.setEnabled(enabled)
+
+    def _retry_candidate_answer(self):
+        if self.practice_mode == "simulate" and self._simulation_question:
+            self._on_simulation_started(self._simulation_question)
+        self.retry_candidate_answer_requested.emit()
+
+    def _on_mock_progress_changed(self, label: str, has_next: bool):
+        self.mock_button.setText(label)
+        self.next_button.setEnabled(has_next)
+        if label.startswith("Mock ") and not self._mock_timer.isActive():
+            self._mock_elapsed = 0
+            self._mock_timer.start(1000)
+            self.mock_timer_label.setVisible(True)
+        elif label == "Mock Complete":
+            self._mock_timer.stop()
+
+    def _tick_mock_timer(self):
+        self._mock_elapsed += 1
+        minutes, seconds = divmod(self._mock_elapsed, 60)
+        self.mock_timer_label.setText(f"Full interview timer · {minutes}:{seconds:02d}")
 
     def _render_candidate_attempt(self, index: int):
         if not 0 <= index < len(self._candidate_attempts):
@@ -827,23 +886,18 @@ class OverlayWindow(QWidget):
             ("Profile support", "profile_support"),
         )
         scores = " • ".join(
-            f"{label} {self._score_label(feedback.scores.get(key))}"
-            for label, key in score_names
+            f"{label} {self._score_label(feedback.scores.get(key))}" for label, key in score_names
         )
-        filler_detail = ", ".join(
-            f"{name} ×{count}" for name, count in metrics.filler_counts
-        ) or "none"
+        filler_detail = (
+            ", ".join(f"{name} ×{count}" for name, count in metrics.filler_counts) or "none"
+        )
         repeated = ", ".join(metrics.repeated_phrases) or "none"
         facts = "".join(f"<li>{html.escape(item)}</li>" for item in feedback.facts)
-        improvements = "".join(
-            f"<li>{html.escape(item)}</li>" for item in feedback.improvements
-        )
+        improvements = "".join(f"<li>{html.escape(item)}</li>" for item in feedback.improvements)
         unsupported = "".join(
             f"<li>{html.escape(item)}</li>" for item in feedback.unsupported_claims
         )
-        tradeoffs = "".join(
-            f"<li>{html.escape(item)}</li>" for item in feedback.missing_tradeoffs
-        )
+        tradeoffs = "".join(f"<li>{html.escape(item)}</li>" for item in feedback.missing_tradeoffs)
         comparison = (
             f"<p><b>Compared with attempt {attempt.comparison.previous_attempt_number}:</b> "
             f"{html.escape(attempt.comparison.summary)}</p>"
@@ -856,9 +910,7 @@ class OverlayWindow(QWidget):
             else "<p><b>Profile check:</b> No unsupported claims were flagged.</p>"
         )
         tradeoff_section = (
-            f"<p><b>Missing technical trade-offs:</b></p><ul>{tradeoffs}</ul>"
-            if tradeoffs
-            else ""
+            f"<p><b>Missing technical trade-offs:</b></p><ul>{tradeoffs}</ul>" if tradeoffs else ""
         )
         self.candidate_feedback_view.setHtml(
             f"<p><b>Scores:</b> {scores}</p>"
@@ -887,10 +939,14 @@ class OverlayWindow(QWidget):
         self.label.setText(html.escape(self.status_label.text()))
 
     def _copy_answer(self):
-        QApplication.clipboard().setText("".join(self._current_answer_chunks).strip())
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText("".join(self._current_answer_chunks).strip())
 
     def _copy_session(self):
-        QApplication.clipboard().setText("".join(self._plain_history_parts).strip())
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText("".join(self._plain_history_parts).strip())
 
     def _submit_manual_question(self):
         question = self.question_input.text().strip()
@@ -911,18 +967,29 @@ class OverlayWindow(QWidget):
         return self.profile_combo.currentData()
 
     def _is_at_bottom(self) -> bool:
-        bar = self.scroll.verticalScrollBar()
+        bar = self.scroll_area.verticalScrollBar()
+        if bar is None:
+            return True
         return bar.value() >= bar.maximum() - 4
 
     def _scroll_to_bottom(self):
         # Layout hasn't recomputed the new content height yet on this tick,
         # so defer the scroll by one event-loop pass.
-        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(
-            self.scroll.verticalScrollBar().maximum()
-        ))
+        def scroll() -> None:
+            bar = self.scroll_area.verticalScrollBar()
+            if bar is not None:
+                bar.setValue(bar.maximum())
+
+        QTimer.singleShot(0, scroll)
 
     def begin_question(self, question: str):
         self.signals.question_started.emit(question)
+
+    def begin_simulation(self, question: str):
+        self.signals.simulation_started.emit(question)
+
+    def set_mock_progress(self, label: str, has_next: bool):
+        self.signals.mock_progress_changed.emit(label, has_next)
 
     def append_text(self, chunk: str):
         self.signals.text_appended.emit(chunk)

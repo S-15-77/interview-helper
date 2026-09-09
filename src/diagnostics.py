@@ -40,9 +40,7 @@ def list_audio_input_devices(pa) -> list[AudioInputDevice]:
                     index=index,
                     name=str(info.get("name", f"Input {index}")),
                     channels=channels,
-                    default_sample_rate=round(
-                        float(info.get("defaultSampleRate", 16000))
-                    ),
+                    default_sample_rate=round(float(info.get("defaultSampleRate", 16000))),
                 )
             )
         except (OSError, TypeError, ValueError):
@@ -58,17 +56,11 @@ def preferred_audio_device_index(
 ) -> int | None:
     if saved_index is not None:
         saved = next((device for device in devices if device.index == saved_index), None)
-        if saved is not None and (
-            not saved_name or saved.name.casefold() == saved_name.casefold()
-        ):
+        if saved is not None and (not saved_name or saved.name.casefold() == saved_name.casefold()):
             return saved.index
     if saved_name:
         exact = next(
-            (
-                device
-                for device in devices
-                if device.name.casefold() == saved_name.casefold()
-            ),
+            (device for device in devices if device.name.casefold() == saved_name.casefold()),
             None,
         )
         if exact is not None:
@@ -77,9 +69,7 @@ def preferred_audio_device_index(
         (device for device in devices if "blackhole" in device.name.casefold()),
         None,
     )
-    return blackhole.index if blackhole is not None else (
-        devices[0].index if devices else None
-    )
+    return blackhole.index if blackhole is not None else (devices[0].index if devices else None)
 
 
 def preferred_candidate_device_index(
@@ -89,25 +79,17 @@ def preferred_candidate_device_index(
     saved_name: str | None = None,
     default_input_index: int | None = None,
 ) -> int | None:
-    candidates = [
-        device for device in devices if device.index != interviewer_device_index
-    ]
+    candidates = [device for device in devices if device.index != interviewer_device_index]
     if saved_index is not None:
         saved = next(
             (device for device in candidates if device.index == saved_index),
             None,
         )
-        if saved is not None and (
-            not saved_name or saved.name.casefold() == saved_name.casefold()
-        ):
+        if saved is not None and (not saved_name or saved.name.casefold() == saved_name.casefold()):
             return saved.index
     if saved_name:
         saved = next(
-            (
-                device
-                for device in candidates
-                if device.name.casefold() == saved_name.casefold()
-            ),
+            (device for device in candidates if device.name.casefold() == saved_name.casefold()),
             None,
         )
         if saved is not None:
@@ -116,23 +98,20 @@ def preferred_candidate_device_index(
         (
             device
             for device in candidates
-            if device.index == default_input_index
-            and "blackhole" not in device.name.casefold()
+            if device.index == default_input_index and "blackhole" not in device.name.casefold()
         ),
         None,
     )
     if default_input is not None:
         return default_input.index
     physical_input = next(
-        (
-            device
-            for device in candidates
-            if "blackhole" not in device.name.casefold()
-        ),
+        (device for device in candidates if "blackhole" not in device.name.casefold()),
         None,
     )
-    return physical_input.index if physical_input is not None else (
-        candidates[0].index if candidates else None
+    return (
+        physical_input.index
+        if physical_input is not None
+        else (candidates[0].index if candidates else None)
     )
 
 
@@ -176,8 +155,7 @@ def check_ollama(
                 {
                     str(model.get("name") or model.get("model")).strip()
                     for model in raw_models
-                    if isinstance(model, dict)
-                    and (model.get("name") or model.get("model"))
+                    if isinstance(model, dict) and (model.get("name") or model.get("model"))
                 }
             )
         )

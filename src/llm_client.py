@@ -1,14 +1,19 @@
 import json
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import requests
+
+from src.context_retrieval import classify_question, keywords
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_URL = f"{DEFAULT_OLLAMA_BASE_URL}/api/generate"
 DEFAULT_MODEL = "qwen2.5:3b-instruct"
 MY_DATA_DIR = Path("my_data")
 APPLICATIONS_DIR = MY_DATA_DIR / "applications"
+PROMPT_CONTEXT_WORD_BUDGET = 900
+_FILE_CACHE: dict[Path, tuple[int, int, str]] = {}
 RESPONSE_STYLE_INSTRUCTIONS = {
     "default": "",
     "shorter": (
@@ -154,6 +159,7 @@ SYSTEM_PROMPT = (
     "</example>"
 )
 
+
 def _read_markdown_dir(
     dir_path: Path,
     *,
@@ -174,7 +180,14 @@ def _read_markdown_dir(
             and file_path.name.lower() != "readme.md"
         ):
             try:
-                content = file_path.read_text(encoding="utf-8").strip()
+                stat = file_path.stat()
+                signature = (stat.st_mtime_ns, stat.st_size)
+                cached = _FILE_CACHE.get(file_path)
+                if cached and cached[:2] == signature:
+                    content = cached[2]
+                else:
+                    content = file_path.read_text(encoding="utf-8").strip()
+                    _FILE_CACHE[file_path] = (*signature, content)
                 if content:
                     docs.append(f"--- File: {file_path.name} ---\n{content}")
             except Exception as e:
@@ -203,11 +216,7 @@ def _application_profile_dir(
     profile_name: str,
     applications_dir: Path = APPLICATIONS_DIR,
 ) -> Path:
-    if (
-        not profile_name
-        or profile_name in {".", ".."}
-        or Path(profile_name).name != profile_name
-    ):
+    if not profile_name or profile_name in {".", ".."} or Path(profile_name).name != profile_name:
         raise ValueError(f"Invalid application profile name: {profile_name!r}")
     applications_root = applications_dir.resolve()
     profile_dir = (applications_root / profile_name).resolve()
@@ -233,8 +242,89 @@ def load_knowledge_base(
     return _read_markdown_dir(my_data_dir, excluded_dirs={"applications"})
 
 
-def load_skills() -> str:
-    return _read_markdown_dir(Path("skills"))
+def load_skills(question_type: str | None = None) -> str:
+    skills_root = Path("skills")
+    if question_type is None:
+        return _read_markdown_dir(skills_root)
+    hints = {
+        "recruiter": ("hr", "recruit", "communication"),
+        "behavioral": ("hr", "behavior", "star", "communication"),
+        "technical": ("technical", "communication"),
+        "coding": ("coding", "algorithm", "technical", "communication"),
+        "system_design": ("system", "design", "technical", "communication"),
+    }.get(question_type, ("communication",))
+    selected = []
+    for path in sorted(skills_root.glob("**/*")):
+        if (
+            path.is_file()
+            and path.suffix.casefold() in {".md", ".txt"}
+            and path.name.casefold() != "readme.md"
+            and any(hint in path.stem.casefold() for hint in hints)
+        ):
+            try:
+                stat = path.stat()
+                signature = (stat.st_mtime_ns, stat.st_size)
+                cached = _FILE_CACHE.get(path)
+                content = (
+                    cached[2]
+                    if cached and cached[:2] == signature
+                    else path.read_text(encoding="utf-8").strip()
+                )
+                _FILE_CACHE[path] = (*signature, content)
+                if content:
+                    selected.append(f"--- File: {path.name} ---\n{content}")
+            except OSError:
+                continue
+    return "\n\n".join(selected)
+
+
+def _select_passages(text: str, question: str, word_budget: int) -> str:
+    if not text.strip() or word_budget <= 0:
+        return ""
+    query = keywords(question)
+    passages = [part.strip() for part in text.split("\n\n") if part.strip()]
+    ranked = sorted(
+        enumerate(passages),
+        key=lambda item: (-len(query & keywords(item[1])), item[0]),
+    )
+    selected: list[tuple[int, str]] = []
+    words_used = 0
+    for original_index, passage in ranked:
+        words = passage.split()
+        remaining = word_budget - words_used
+        if remaining <= 0:
+            break
+        selected.append((original_index, " ".join(words[:remaining])))
+        words_used += min(len(words), remaining)
+    selected.sort()
+    return "\n\n".join(passage for _, passage in selected)
+
+
+def inspect_prompt(
+    context: str,
+    question: str,
+    profile_name: str | None = None,
+    *,
+    word_budget: int = PROMPT_CONTEXT_WORD_BUDGET,
+) -> dict[str, object]:
+    """Return prompt-selection details without sending anything to Ollama."""
+    question_type = classify_question(question)
+    kb_data = _select_passages(load_knowledge_base(profile_name), question, word_budget * 2 // 3)
+    skill_data = _select_passages(
+        load_skills(question_type),
+        question_type + " " + question,
+        word_budget // 3,
+    )
+    return {
+        "question_type": question_type,
+        "profile": profile_name or "default",
+        "prompt_context_budget_words": word_budget,
+        "profile_words": len(kb_data.split()),
+        "skill_words": len(skill_data.split()),
+        "conversation_words": len(context.split()),
+        "selected_profile": kb_data,
+        "selected_skills": skill_data,
+    }
 
 
 def build_prompt(
@@ -246,8 +336,9 @@ def build_prompt(
     if response_style not in RESPONSE_STYLE_INSTRUCTIONS:
         raise ValueError(f"Unknown response style: {response_style}")
     context = context.strip()
-    kb_data = load_knowledge_base(profile_name)
-    skills_data = load_skills()
+    inspection = inspect_prompt(context, question, profile_name)
+    kb_data = str(inspection["selected_profile"])
+    skills_data = str(inspection["selected_skills"])
 
     skills_block = f"{skills_data}\n\n" if skills_data else ""
     if kb_data:
@@ -255,7 +346,11 @@ def build_prompt(
         kb_block = f"Active Application Profile ({profile_label}):\n{kb_data}\n\n"
     else:
         kb_block = ""
-    context_block = f"Recent conversation:\n{context}\n\n" if context else ""
+    context_words = context.split()
+    bounded_context = " ".join(context_words[-260:])
+    context_block = (
+        f"Recent conversation:\nStructured state:\n{bounded_context}\n\n" if bounded_context else ""
+    )
     style_instruction = RESPONSE_STYLE_INSTRUCTIONS[response_style]
     style_block = f"{style_instruction}\n\n" if style_instruction else ""
     return (
@@ -295,11 +390,11 @@ def generate_filler(
 ) -> str:
     prompt = (
         "You are an expert interview copilot. The user is asking an interview question but hasn't finished yet. "
-        f"Partial question: \"{partial_question}\"\n\n"
+        f'Partial question: "{partial_question}"\n\n'
         "Generate a brief, natural stalling phrase to buy time. For example: 'That's a great question about [topic]...' "
         "or 'Let me think about [topic] for a second...'. Do NOT answer the question. ONLY output the stalling phrase, max 12 words."
     )
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "prompt": prompt,
         "stream": False,
@@ -324,7 +419,7 @@ def stream_answer(
     base_url: str = DEFAULT_OLLAMA_BASE_URL,
 ) -> Iterator[str]:
     num_predict = 180 if response_style == "shorter" else 320
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "prompt": build_prompt(
             context,

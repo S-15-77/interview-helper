@@ -27,7 +27,7 @@ def _pcm_bytes(frame):
 
 def _frames(audio, frame_size):
     for start in range(0, len(audio) - frame_size + 1, frame_size):
-        yield audio[start:start + frame_size]
+        yield audio[start : start + frame_size]
 
 
 def test_segmenter_finalizes_utterance_after_trailing_silence():
@@ -78,19 +78,23 @@ def test_segmenter_emits_non_final_partial_during_continuous_speech():
 
 
 def test_find_device_index_matches_by_substring_case_insensitively():
-    pa = _FakePyAudio([
-        {"name": "MacBook Pro Microphone", "maxInputChannels": 1},
-        {"name": "BlackHole 2ch", "maxInputChannels": 2},
-    ])
+    pa = _FakePyAudio(
+        [
+            {"name": "MacBook Pro Microphone", "maxInputChannels": 1},
+            {"name": "BlackHole 2ch", "maxInputChannels": 2},
+        ]
+    )
 
     assert find_device_index(pa) == 1
 
 
 def test_find_device_index_skips_output_only_devices():
-    pa = _FakePyAudio([
-        {"name": "BlackHole 2ch", "maxInputChannels": 0},  # output side of the device
-        {"name": "BlackHole 2ch", "maxInputChannels": 2},
-    ])
+    pa = _FakePyAudio(
+        [
+            {"name": "BlackHole 2ch", "maxInputChannels": 0},  # output side of the device
+            {"name": "BlackHole 2ch", "maxInputChannels": 2},
+        ]
+    )
 
     assert find_device_index(pa) == 1
 

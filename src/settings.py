@@ -3,10 +3,18 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-
-SETTINGS_VERSION = 2
+SETTINGS_VERSION = 3
 DEFAULT_SETTINGS_PATH = Path("my_data/settings.json")
 ANSWER_STYLES = ("default", "shorter", "more_detail")
+PRACTICE_MODES = ("learn", "simulate", "review")
+INTERVIEW_DIFFICULTIES = ("introductory", "intermediate", "advanced")
+INTERVIEW_ROUNDS = (
+    "recruiter",
+    "behavioral",
+    "technical",
+    "coding",
+    "system_design",
+)
 
 
 class SettingsError(ValueError):
@@ -21,6 +29,10 @@ class AppSettings:
     whisper_model: str = "base.en"
     whisper_language: str = "en"
     answer_style: str = "default"
+    practice_mode: str = "learn"
+    interview_length: int = 8
+    interview_difficulty: str = "intermediate"
+    interview_rounds: tuple[str, ...] = INTERVIEW_ROUNDS
     vad_aggressiveness: int = 3
     silence_timeout_ms: int = 1000
     audio_device_index: int | None = None
@@ -34,6 +46,8 @@ class AppSettings:
     overlay_opacity: int = 100
     overlay_font_size: int = 16
     session_logging_enabled: bool = True
+    session_retention_days: int = 0
+    redact_exports: bool = False
     default_application_profile: str | None = None
 
     def validated(self) -> "AppSettings":
@@ -50,24 +64,33 @@ class AppSettings:
         if not self.whisper_language.strip():
             raise SettingsError("A Whisper language or 'auto' must be selected.")
         if self.answer_style not in ANSWER_STYLES:
+            raise SettingsError(f"Answer style must be one of: {', '.join(ANSWER_STYLES)}.")
+        if self.practice_mode not in PRACTICE_MODES:
+            raise SettingsError(f"Practice mode must be one of: {', '.join(PRACTICE_MODES)}.")
+        if not 1 <= self.interview_length <= 30:
+            raise SettingsError("Interview length must be between 1 and 30 questions.")
+        if self.interview_difficulty not in INTERVIEW_DIFFICULTIES:
             raise SettingsError(
-                f"Answer style must be one of: {', '.join(ANSWER_STYLES)}."
+                "Interview difficulty must be introductory, intermediate, or advanced."
             )
+        if not self.interview_rounds or any(
+            round_name not in INTERVIEW_ROUNDS for round_name in self.interview_rounds
+        ):
+            raise SettingsError("Select at least one supported interview round.")
         if self.vad_aggressiveness not in range(4):
             raise SettingsError("VAD aggressiveness must be between 0 and 3.")
         if not 300 <= self.silence_timeout_ms <= 5000:
             raise SettingsError("Silence timeout must be between 300 and 5000 ms.")
         if self.audio_device_index is not None and self.audio_device_index < 0:
             raise SettingsError("Audio device index cannot be negative.")
-        if (
-            self.candidate_audio_device_index is not None
-            and self.candidate_audio_device_index < 0
-        ):
+        if self.candidate_audio_device_index is not None and self.candidate_audio_device_index < 0:
             raise SettingsError("Candidate microphone index cannot be negative.")
         if self.retain_candidate_audio and not self.candidate_capture_enabled:
             raise SettingsError(
                 "Candidate audio cannot be retained while candidate capture is disabled."
             )
+        if self.practice_mode == "simulate" and not self.candidate_capture_enabled:
+            raise SettingsError("Simulate mode requires candidate-response capture.")
         if (
             self.candidate_capture_enabled
             and self.audio_device_index is not None
@@ -84,6 +107,8 @@ class AppSettings:
             raise SettingsError("Overlay opacity must be between 35 and 100 percent.")
         if not 12 <= self.overlay_font_size <= 28:
             raise SettingsError("Overlay font size must be between 12 and 28 pixels.")
+        if not 0 <= self.session_retention_days <= 3650:
+            raise SettingsError("Session retention must be between 0 and 3650 days.")
         return replace(
             self,
             ollama_base_url=self.ollama_base_url.strip().rstrip("/"),
@@ -91,14 +116,8 @@ class AppSettings:
             whisper_model=self.whisper_model.strip(),
             whisper_language=self.whisper_language.strip(),
             audio_device_name=(self.audio_device_name or "").strip() or None,
-            candidate_audio_device_name=(
-                self.candidate_audio_device_name or ""
-            ).strip()
-            or None,
-            default_application_profile=(
-                self.default_application_profile or ""
-            ).strip()
-            or None,
+            candidate_audio_device_name=(self.candidate_audio_device_name or "").strip() or None,
+            default_application_profile=(self.default_application_profile or "").strip() or None,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -113,7 +132,15 @@ class AppSettings:
                 "model": settings.whisper_model,
                 "language": settings.whisper_language,
             },
-            "answers": {"style": settings.answer_style},
+            "answers": {
+                "style": settings.answer_style,
+                "practice_mode": settings.practice_mode,
+            },
+            "interview": {
+                "length": settings.interview_length,
+                "difficulty": settings.interview_difficulty,
+                "rounds": list(settings.interview_rounds),
+            },
             "audio": {
                 "device_index": settings.audio_device_index,
                 "device_name": settings.audio_device_name,
@@ -130,7 +157,11 @@ class AppSettings:
                 "opacity": settings.overlay_opacity,
                 "font_size": settings.overlay_font_size,
             },
-            "session": {"logging_enabled": settings.session_logging_enabled},
+            "session": {
+                "logging_enabled": settings.session_logging_enabled,
+                "retention_days": settings.session_retention_days,
+                "redact_exports": settings.redact_exports,
+            },
             "application": {
                 "default_profile": settings.default_application_profile,
             },
@@ -143,7 +174,7 @@ class AppSettings:
         version = raw.get("version", SETTINGS_VERSION)
         if isinstance(version, bool) or not isinstance(version, int):
             raise SettingsError("Settings version must be an integer.")
-        if version not in (1, SETTINGS_VERSION):
+        if version not in (1, 2, SETTINGS_VERSION):
             raise SettingsError(
                 f"Unsupported settings version {version}; expected {SETTINGS_VERSION}."
             )
@@ -151,6 +182,7 @@ class AppSettings:
         ollama = _section(raw, "ollama")
         whisper = _section(raw, "whisper")
         answers = _section(raw, "answers")
+        interview = _section(raw, "interview")
         audio = _section(raw, "audio")
         overlay = _section(raw, "overlay")
         session = _section(raw, "session")
@@ -164,18 +196,28 @@ class AppSettings:
                     ollama.get("base_url", defaults.ollama_base_url),
                     "ollama.base_url",
                 ),
-                ollama_model=_text(
-                    ollama.get("model", defaults.ollama_model), "ollama.model"
-                ),
-                whisper_model=_text(
-                    whisper.get("model", defaults.whisper_model), "whisper.model"
-                ),
+                ollama_model=_text(ollama.get("model", defaults.ollama_model), "ollama.model"),
+                whisper_model=_text(whisper.get("model", defaults.whisper_model), "whisper.model"),
                 whisper_language=_text(
                     whisper.get("language", defaults.whisper_language),
                     "whisper.language",
                 ),
-                answer_style=_text(
-                    answers.get("style", defaults.answer_style), "answers.style"
+                answer_style=_text(answers.get("style", defaults.answer_style), "answers.style"),
+                practice_mode=_text(
+                    answers.get("practice_mode", defaults.practice_mode),
+                    "answers.practice_mode",
+                ),
+                interview_length=_integer(
+                    interview.get("length", defaults.interview_length),
+                    "interview.length",
+                ),
+                interview_difficulty=_text(
+                    interview.get("difficulty", defaults.interview_difficulty),
+                    "interview.difficulty",
+                ),
+                interview_rounds=_string_tuple(
+                    interview.get("rounds", list(defaults.interview_rounds)),
+                    "interview.rounds",
                 ),
                 vad_aggressiveness=_integer(
                     audio.get("vad_aggressiveness", defaults.vad_aggressiveness),
@@ -234,15 +276,19 @@ class AppSettings:
                     "overlay.font_size",
                 ),
                 session_logging_enabled=_boolean(
-                    session.get(
-                        "logging_enabled", defaults.session_logging_enabled
-                    ),
+                    session.get("logging_enabled", defaults.session_logging_enabled),
                     "session.logging_enabled",
                 ),
+                session_retention_days=_integer(
+                    session.get("retention_days", defaults.session_retention_days),
+                    "session.retention_days",
+                ),
+                redact_exports=_boolean(
+                    session.get("redact_exports", defaults.redact_exports),
+                    "session.redact_exports",
+                ),
                 default_application_profile=_optional_string(
-                    application.get(
-                        "default_profile", defaults.default_application_profile
-                    )
+                    application.get("default_profile", defaults.default_application_profile)
                 ),
             )
         except (TypeError, ValueError) as exc:
@@ -281,6 +327,12 @@ def _boolean(value: Any, name: str) -> bool:
     if not isinstance(value, bool):
         raise SettingsError(f"{name} must be true or false.")
     return value
+
+
+def _string_tuple(value: Any, name: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise SettingsError(f"{name} must be a list of strings.")
+    return tuple(value)
 
 
 def _optional_string(value: Any) -> str | None:
