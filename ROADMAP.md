@@ -248,11 +248,11 @@ request. This can consume context and weaken instruction-following on smaller lo
 - [x] Add integration tests for cancellation, queue pressure, and shutdown.
 - [x] Add a versioned session-data schema and migrations.
 - [x] Add structured application logs with a troubleshooting export.
-- [ ] Add a `LICENSE` before opening the repository for reuse or contribution.
+- [x] Add a `LICENSE` before opening the repository for reuse or contribution.
 
 The macOS build/sign script is present, but the signing checklist remains open until a Developer
-ID identity is supplied and a signed/notarized artifact is verified. The license remains open
-because selecting legal terms requires the repository owner's decision.
+ID identity is supplied and a signed/notarized artifact is verified. The repository is licensed
+under GPL-3.0-only, matching the open-source GPLv3 edition of PyQt6 used by the application.
 
 ## Recommended implementation sequence
 
@@ -291,7 +291,7 @@ because selecting legal terms requires the repository owner's decision.
 - [x] CI, formatting, type checking, and integration tests.
 - [x] Privacy controls, data migrations, and documentation.
 - [ ] Sign and notarize a release using the owner's Apple Developer ID credentials.
-- [ ] Select and add the repository license before public distribution.
+- [x] Select and add the repository license before public distribution (GPL-3.0-only).
 
 ## Recommended next step
 
@@ -300,5 +300,4 @@ candidate microphone, hides coaching until the attempt ends, evaluates the respo
 retry and attempt comparison.
 
 The next step is a small real-user pilot of the packaged app, followed by Developer ID signing and
-notarization. Before publishing the repository for reuse, the owner must also select and add an
-appropriate license.
+notarization.

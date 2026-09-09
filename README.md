@@ -200,3 +200,11 @@ terminal.
 - **Can't hear the call yourself**: confirm both your speakers/headphones
   *and* BlackHole 2ch are checked in the Multi-Output Device (step 3), and
   that device is selected as your Mac's output.
+
+## License
+
+Interview Helper is open-source software licensed under the
+[GNU General Public License v3.0 only](LICENSE) (`GPL-3.0-only`). The GPL license was selected to
+match the open-source GPLv3 edition of PyQt6 used by the application. Redistribution and
+modification are permitted under the GPLv3 terms; distributors of object-code builds must also
+make the corresponding source available as the license requires.

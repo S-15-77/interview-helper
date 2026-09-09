@@ -1,6 +1,10 @@
 from PyInstaller.utils.hooks import collect_data_files
 
-datas = collect_data_files("faster_whisper") + [("../skills", "skills"), ("../templates", "templates")]
+datas = collect_data_files("faster_whisper") + [
+    ("../skills", "skills"),
+    ("../templates", "templates"),
+    ("../LICENSE", "."),
+]
 
 a = Analysis(
     ["../src/app.py"],
