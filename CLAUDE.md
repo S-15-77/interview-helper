@@ -28,9 +28,14 @@ ollama pull qwen2.5:3b-instruct       # current default model (src/llm_client.py
 python -m src.app
 
 # tests
-python -m pytest tests/                          # pytest.ini sets pythonpath=. for `src.` imports
+python -m pytest -m "not hardware and not ollama" # same checks used by CI
 python -m pytest tests/test_llm_client.py -v      # single file
 python -m pytest tests/test_llm_client.py::test_name  # single test
+
+# formatting, linting, and type checking
+ruff format --check src tests
+ruff check src tests
+mypy src
 
 # GUI tests (tests/test_overlay.py) need an offscreen Qt platform:
 QT_QPA_PLATFORM=offscreen python -m pytest tests/test_overlay.py
@@ -178,9 +183,9 @@ a strict upgrade.
 
 ## Contributing
 
-- Run `python -m pytest tests/` before opening a PR — there's no CI configured yet, so this
-  is the only automated gate.
-- No linter/formatter is configured; match the style already in the file you're editing.
+- Run `ruff format --check src tests`, `ruff check src tests`, `mypy src`, and
+  `python -m pytest -m "not hardware and not ollama"` before opening a PR. GitHub Actions runs
+  the same checks on every pull request and on pushes to `main`.
 - Comments in this codebase explain *why*, not *what* — they're reserved for non-obvious
   workarounds, rejected alternatives, or platform quirks (see the `Qt.WindowType.Tool` and
   `_configure_native_window` comments in `overlay.py` for the pattern). Don't add comments
@@ -192,5 +197,5 @@ a strict upgrade.
   and must never end up in a commit or a PR diff. `skills/` is the opposite: general
   interview-coaching rules are expected to be committed there — that's the intended way to
   extend behavior without touching `SYSTEM_PROMPT` in `src/llm_client.py`.
-- This repo has no `LICENSE` file yet — add one before actually opening it up, since without
-  one the default is "all rights reserved" and others can't legally reuse or contribute code.
+- Contributions are distributed under the repository's GPL-3.0-only license. Do not add code or
+  assets whose terms are incompatible with GPLv3 distribution.
