@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QPoint
 from PyQt6.QtWidgets import QApplication
 
 from src.diagnostics import OllamaDiagnostics
@@ -156,6 +157,29 @@ def test_candidate_microphone_is_logically_separate_from_interviewer_input():
     setup.audio_device_combo.setCurrentIndex(1)
 
     assert setup.candidate_device_combo.currentData() != setup.audio_device_combo.currentData()
+
+
+def test_setup_layout_fits_minimum_width_and_shows_consent_before_tests():
+    setup = SetupWindow(
+        FakePyAudio([input_device(), input_device("Candidate Microphone")]),
+        AppSettings(candidate_capture_enabled=True),
+        auto_check=False,
+    )
+    setup.resize(setup.minimumSize())
+    setup.show()
+    _app.processEvents()
+
+    scroll = setup.settings_scroll
+    viewport = scroll.viewport()
+    consent_position = setup.consent_checkbox.mapTo(viewport, QPoint(0, 0))
+    test_position = setup.test_audio_button.mapTo(viewport, QPoint(0, 0))
+
+    assert not scroll.horizontalScrollBar().isVisible()
+    assert scroll.widget().width() <= viewport.width()
+    assert viewport.rect().contains(consent_position)
+    assert consent_position.y() < test_position.y()
+
+    setup.close()
 
 
 def test_consent_is_not_remembered_and_retention_change_requires_reconsent():

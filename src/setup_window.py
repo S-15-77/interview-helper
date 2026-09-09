@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -177,9 +177,10 @@ class SetupWindow(QDialog):
         content_layout.addStretch()
         health_group = self._build_health_group()
 
-        scroll = QScrollArea()
-        scroll.setWidget(content)
-        scroll.setWidgetResizable(True)
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.settings_scroll.setWidget(content)
+        self.settings_scroll.setWidgetResizable(True)
 
         self.save_button = QPushButton("Save Settings")
         self.save_button.clicked.connect(self._save_only)
@@ -201,7 +202,7 @@ class SetupWindow(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(title)
         layout.addWidget(intro)
-        layout.addWidget(scroll)
+        layout.addWidget(self.settings_scroll)
         layout.addWidget(health_group)
         layout.addLayout(buttons)
 
@@ -232,6 +233,12 @@ class SetupWindow(QDialog):
         self.test_candidate_audio_button.clicked.connect(self.test_candidate_audio_capture)
         self.test_transcription_button = QPushButton("Test Transcription (5 sec)")
         self.test_transcription_button.clicked.connect(self.test_transcription)
+        test_actions = QWidget()
+        test_actions_layout = QGridLayout(test_actions)
+        test_actions_layout.setContentsMargins(0, 0, 0, 0)
+        test_actions_layout.addWidget(self.test_audio_button, 0, 0)
+        test_actions_layout.addWidget(self.test_candidate_audio_button, 0, 1)
+        test_actions_layout.addWidget(self.test_transcription_button, 1, 0, 1, 2)
         self.transcription_output = QPlainTextEdit()
         self.transcription_output.setReadOnly(True)
         self.transcription_output.setMaximumHeight(70)
@@ -247,22 +254,20 @@ class SetupWindow(QDialog):
         self.consent_checkbox.setStyleSheet("font-weight: 600;")
         self.consent_details_label = QLabel()
         self.consent_details_label.setWordWrap(True)
-        self.consent_details_label.setStyleSheet("color: #555; font-size: 11px;")
+        self.consent_details_label.setStyleSheet("font-size: 11px;")
 
         layout.addWidget(QLabel("Interviewer/call input"), 0, 0)
         layout.addWidget(self.audio_device_combo, 0, 1, 1, 2)
         layout.addWidget(self.candidate_capture_checkbox, 1, 0, 1, 3)
         layout.addWidget(QLabel("Candidate microphone"), 2, 0)
         layout.addWidget(self.candidate_device_combo, 2, 1, 1, 2)
-        layout.addWidget(self.audio_meter, 3, 0, 1, 3)
-        layout.addWidget(self.test_audio_button, 4, 0)
-        layout.addWidget(self.test_candidate_audio_button, 4, 1)
-        layout.addWidget(self.test_transcription_button, 4, 2)
-        layout.addWidget(self.audio_status_label, 5, 0, 1, 3)
-        layout.addWidget(self.transcription_output, 6, 0, 1, 3)
-        layout.addWidget(self.retain_candidate_audio_checkbox, 7, 0, 1, 3)
-        layout.addWidget(self.consent_checkbox, 8, 0, 1, 3)
-        layout.addWidget(self.consent_details_label, 9, 0, 1, 3)
+        layout.addWidget(self.retain_candidate_audio_checkbox, 3, 0, 1, 3)
+        layout.addWidget(self.consent_checkbox, 4, 0, 1, 3)
+        layout.addWidget(self.consent_details_label, 5, 0, 1, 3)
+        layout.addWidget(self.audio_meter, 6, 0, 1, 3)
+        layout.addWidget(test_actions, 7, 0, 1, 3)
+        layout.addWidget(self.audio_status_label, 8, 0, 1, 3)
+        layout.addWidget(self.transcription_output, 9, 0, 1, 3)
         return group
 
     def _build_model_group(self) -> QGroupBox:
@@ -326,12 +331,12 @@ class SetupWindow(QDialog):
             self.interview_difficulty_combo.addItem(difficulty.title(), difficulty)
         self.round_checkboxes = {}
         rounds_widget = QWidget()
-        rounds_layout = QHBoxLayout(rounds_widget)
+        rounds_layout = QGridLayout(rounds_widget)
         rounds_layout.setContentsMargins(0, 0, 0, 0)
-        for round_name in INTERVIEW_ROUNDS:
+        for index, round_name in enumerate(INTERVIEW_ROUNDS):
             checkbox = QCheckBox(round_name.replace("_", " ").title())
             self.round_checkboxes[round_name] = checkbox
-            rounds_layout.addWidget(checkbox)
+            rounds_layout.addWidget(checkbox, index // 2, index % 2)
         self.profile_combo = QComboBox()
         self.profile_combo.addItem("Default", None)
         for profile in application_profiles:
