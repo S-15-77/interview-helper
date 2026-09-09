@@ -248,54 +248,56 @@ request. This can consume context and weaken instruction-following on smaller lo
 - [x] Add integration tests for cancellation, queue pressure, and shutdown.
 - [x] Add a versioned session-data schema and migrations.
 - [x] Add structured application logs with a troubleshooting export.
-- [ ] Add a `LICENSE` before opening the repository for reuse or contribution.
+- [x] Add a `LICENSE` before opening the repository for reuse or contribution.
 
 The macOS build/sign script is present, but the signing checklist remains open until a Developer
-ID identity is supplied and a signed/notarized artifact is verified. The license remains open
-because selecting legal terms requires the repository owner's decision.
+ID identity is supplied and a signed/notarized artifact is verified. The repository is licensed
+under GPL-3.0-only, matching the open-source GPLv3 edition of PyQt6 used by the application.
 
 ## Recommended implementation sequence
 
-### Milestone 1: Reliable live session
+### Milestone 1: Reliable live session — complete
 
-- Prompt-purpose corrections.
-- Pause, cancel, regenerate, and clear controls.
-- Visible pipeline status.
-- Stale-question and duplicate handling.
-- Transcript correction.
+- [x] Prompt-purpose corrections.
+- [x] Pause, cancel, regenerate, and clear controls.
+- [x] Visible pipeline status.
+- [x] Stale-question and duplicate handling.
+- [x] Transcript correction.
 
-### Milestone 2: Easy setup
+### Milestone 2: Easy setup — complete
 
-- Settings storage.
-- Audio-device selector and level meter.
-- Ollama/model health checks.
-- In-app transcription test.
+- [x] Settings storage.
+- [x] Audio-device selector and level meter.
+- [x] Ollama/model health checks.
+- [x] In-app transcription test.
 
-### Milestone 3: Real practice loop
+### Milestone 3: Real practice loop — complete
 
-- Candidate microphone capture.
-- Simulate mode.
-- Answer evaluation and actionable feedback.
-- Retry and attempt comparison.
+- [x] Candidate microphone capture.
+- [x] Simulate mode.
+- [x] Answer evaluation and actionable feedback.
+- [x] Retry and attempt comparison.
 
-### Milestone 4: Structured preparation
+### Milestone 4: Structured preparation — complete
 
-- Job-specific question generation.
-- Follow-up questions.
-- Session review dashboard.
-- Progress tracking and exports.
+- [x] Job-specific question generation.
+- [x] Follow-up questions.
+- [x] Session review dashboard.
+- [x] Progress tracking and exports.
 
-### Milestone 5: Shareable product
+### Milestone 5: Shareable product — release preparation
 
-- Packaged macOS app.
-- CI, formatting, type checking, and integration tests.
-- Privacy controls, data migrations, documentation, and license.
+- [x] Packaged macOS app and reproducible build script.
+- [x] CI, formatting, type checking, and integration tests.
+- [x] Privacy controls, data migrations, and documentation.
+- [ ] Sign and notarize a release using the owner's Apple Developer ID credentials.
+- [x] Select and add the repository license before public distribution (GPL-3.0-only).
 
-## Recommended next feature
+## Recommended next step
 
-If only one major feature is selected, implement **Simulate Mode with candidate-response
-feedback**. It offers the clearest user value and most strongly differentiates Interview
-Helper from a simple local answer generator.
+**Simulate Mode with candidate-response feedback is complete.** It now captures a separate
+candidate microphone, hides coaching until the attempt ends, evaluates the response, and supports
+retry and attempt comparison.
 
-Before that larger feature, complete the smaller live-control and stale-work items in
-Milestone 1 so the underlying session pipeline is dependable.
+The next step is a small real-user pilot of the packaged app, followed by Developer ID signing and
+notarization.
