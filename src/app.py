@@ -874,6 +874,10 @@ def main():
         application_profiles=profiles,
         settings_load_error=settings_error,
     )
+    # Packaging checks need a normal Qt shutdown. Sending SIGQUIT (Ctrl+\)
+    # makes macOS display a crash report even when the app itself is healthy.
+    if "--smoke-test" in sys.argv:
+        QTimer.singleShot(1000, setup.reject)
     if setup.exec() != QDialog.DialogCode.Accepted:
         pa.terminate()
         return

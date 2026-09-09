@@ -177,6 +177,7 @@ python -m src.prompt_inspector "Tell me about a time you led a project" --profil
 Run `pytest -m "not hardware and not ollama"`, `ruff check src tests`, and `mypy src` locally.
 `packaging/build_macos.sh` builds the `.app`; setting `APPLE_SIGNING_IDENTITY` also signs it. Apple
 notarization still requires the maintainer's Developer ID credentials.
+Set `RUN_SMOKE_TEST=1` to launch and close the packaged setup window normally after the build.
 
 Keyboard shortcuts are **Ctrl+Option+P** for Pause/Resume, **Esc** for Cancel, and
 **Ctrl+Option+R** for Regenerate while the Interview Overlay app is active. On macOS,

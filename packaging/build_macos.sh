@@ -11,3 +11,7 @@ if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
 else
   echo "Unsigned app built. Set APPLE_SIGNING_IDENTITY to produce a signed build."
 fi
+
+if [ "${RUN_SMOKE_TEST:-0}" = "1" ]; then
+  QT_QPA_PLATFORM=offscreen "dist/Interview Helper.app/Contents/MacOS/Interview Helper" --smoke-test
+fi
